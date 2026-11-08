@@ -23,57 +23,83 @@
 #   bateria < 15%      -> power-saver   (EPP=power)
 #
 # Para desactivar:  systemctl --user disable --now power-profile-auto.service
+#
+# Uso:  power-profile-auto.sh              vigila y aplica (lo lanza la unidad)
+#       power-profile-auto.sh --comprobar  sale 0 solo si hay algo que vigilar
 # ─────────────────────────────────────────────────────────────────────────────
 
 UMBRAL_BATERIA_BAJA=15
-INTERVALO=5
 
-# sysfs no soporta inotify, asi que no sirve una unidad .path ni inotifywait:
-# hay que sondear. Cada ciclo son dos lecturas de /sys y una comparacion.
-ruta_ac() {
-    for d in /sys/class/power_supply/*/; do
-        [ "$(cat "$d/type" 2>/dev/null)" = "Mains" ] || continue
-        echo "$d/online"
-        return
-    done
+# Por eventos, no por sondeo. `upower --monitor` escribe una linea cada vez que
+# upowerd ve un cambio (cargador conectado o desconectado, % de bateria), y el
+# bucle duerme en `read` hasta entonces. La version anterior leia sysfs cada
+# 5 s porque sysfs no admite inotify: 17 000 vueltas al dia con un fork de
+# `sleep` y varios de `cat` cada una (coreutils en Rust: ~8 MB por proceso), y
+# hasta 5 s de retraso al desenchufar. upowerd ya sondea la bateria por su
+# cuenta; aqui solo se escucha su resultado.
+
+# Rutas de sysfs, resueltas una vez. Luego se leen con el builtin `read`, sin
+# fork. Se ignoran las baterias con scope=Device: son las de ratones y
+# teclados inalambricos (hidpp_battery_*), no la del equipo.
+AC="" BAT=""
+for d in /sys/class/power_supply/*; do
+    tipo="" scope=""
+    read -r tipo 2>/dev/null <"$d/type" || continue
+    read -r scope 2>/dev/null <"$d/scope"
+    [ "$scope" = "Device" ] && continue
+    case "$tipo" in
+        Mains)   [ -n "$AC" ] || AC="$d/online" ;;
+        Battery) [ -n "$BAT" ] || BAT="$d/capacity" ;;
+    esac
+done
+
+# Sin cargador (equipo de sobremesa) o sin las herramientas no hay nada que
+# hacer. La unidad lo usa como ExecCondition: el servicio se salta sin quedar
+# en fallo y sin reintentos.
+comprobar() {
+    [ -n "$AC" ] && command -v upower >/dev/null && command -v powerprofilesctl >/dev/null
 }
 
-capacidad_bateria() {
-    for d in /sys/class/power_supply/*/; do
-        [ "$(cat "$d/type" 2>/dev/null)" = "Battery" ] || continue
-        cat "$d/capacity" 2>/dev/null
-        return
-    done
-    echo 100
-}
-
-perfil_deseado() {
-    if [ "$(cat "$AC" 2>/dev/null)" = "1" ]; then
-        echo performance
-    elif [ "$(capacidad_bateria)" -lt "$UMBRAL_BATERIA_BAJA" ]; then
-        echo power-saver
-    else
-        echo balanced
-    fi
-}
-
-AC=$(ruta_ac)
-if [ -z "$AC" ]; then
-    echo "sin adaptador de red en /sys/class/power_supply: nada que vigilar" >&2
+if [ "${1:-}" = "--comprobar" ]; then
+    # 1 explicito: ExecCondition salta la unidad con 1..254, pero 255 la falla.
+    comprobar && exit 0
     exit 1
+fi
+if ! comprobar; then
+    echo "sin cargador, upower o powerprofilesctl: nada que vigilar" >&2
+    exit 0
 fi
 
 anterior=""
-while :; do
-    quiero=$(perfil_deseado)
-    # Solo se escribe cuando cambia el veredicto, no cuando cambia el perfil:
-    # asi un cambio manual (la tecla XF86Launch1 -> `dms ipc call powerprofile
-    # cycle`) aguanta hasta que se enchufe o desenchufe el cargador.
-    if [ "$quiero" != "$anterior" ]; then
-        if powerprofilesctl set "$quiero" 2>/dev/null; then
-            echo "perfil -> $quiero"
-            anterior="$quiero"
-        fi
+
+# Solo se escribe cuando cambia el veredicto, no cuando cambia el perfil: asi
+# un cambio manual (la tecla XF86Launch1 -> `dms ipc call powerprofile cycle`)
+# aguanta hasta que se enchufe o desenchufe el cargador.
+# Si powerprofilesctl falla (polkit aun sin sesion activa al entrar), devuelve
+# error y el script sale: con eventos no hay una vuelta siguiente que lo
+# reintente, asi que reintenta systemd (Restart=on-failure, con limite).
+evaluar() {
+    online=0 capacidad=100
+    read -r online 2>/dev/null <"$AC"
+    [ -z "$BAT" ] || read -r capacidad 2>/dev/null <"$BAT"
+
+    if [ "$online" = 1 ]; then
+        quiero=performance
+    elif [ "$capacidad" -lt "$UMBRAL_BATERIA_BAJA" ] 2>/dev/null; then
+        quiero=power-saver
+    else
+        quiero=balanced
     fi
-    sleep "$INTERVALO"
+
+    [ "$quiero" = "$anterior" ] && return 0
+    powerprofilesctl set "$quiero" || return 1
+    echo "perfil -> $quiero"
+    anterior=$quiero
+}
+
+evaluar || exit 1
+upower --monitor | while read -r _; do
+    evaluar || exit 1
 done
+echo "upower --monitor termino (upowerd reiniciado?)" >&2
+exit 1

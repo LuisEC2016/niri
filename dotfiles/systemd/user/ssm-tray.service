@@ -1,0 +1,18 @@
+[Unit]
+Description=Icono de bandeja de los tuneles AWS SSM
+# Antes lo lanzaba config.kdl con spawn-at-startup. ssm-tray no esta en este
+# repo y solo existe donde se ha instalado aparte: sin el, la unidad se salta
+# en vez de dejar en el log de niri un spawn fallido en cada arranque.
+ConditionFileIsExecutable=%h/.local/bin/ssm-tray
+PartOf=graphical-session.target
+# Es un StatusNotifierItem: lo registra el watcher de la barra de DMS.
+After=graphical-session.target dms.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/ssm-tray
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

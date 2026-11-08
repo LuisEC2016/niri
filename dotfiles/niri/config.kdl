@@ -370,33 +370,37 @@ window-rule {
 // minimizar y le quita el nombre cuando se vacía.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Vigilante: si una ventana minimizada recibe el foco (dock de DMS, Alt+Tab),
-// la devuelve a su workspace de origen.
-spawn-at-startup "sh" "-c" "~/.config/niri/scripts/niri-minimize-watch.sh"
-
-// Saneo de audio: corrige el perfil de la tarjeta si WirePlumber restaura uno
-// sin salida conectada, y fija altavoz + microfono interno como dispositivos
-// por defecto para que Zoom, Slack y Chromium ("Same as System") los tomen.
-spawn-at-startup "sh" "-c" "~/.config/niri/scripts/audio-init.sh"
-
-// Icono de bandeja de los tuneles AWS SSM (StatusNotifierItem en la barra de DMS).
-spawn-at-startup "ssm-tray"
-
-// Perfil de energia automatico: NO se lanza desde aqui, es una unidad de
-// systemd de usuario — power-profile-auto.service, atada a
-// graphical-session.target — porque cambiar el perfil necesita que polkit vea
-// una sesion activa, y porque asi sobrevive a un `niri msg action reload` o a
-// reiniciar el compositor.
+// ─────────────────────────────────────────────────────────────────────────────
+// Sin spawn-at-startup: este config no arranca ningún proceso al iniciar.
+// Lo que antes se lanzaba aquí ahora arranca solo cuando hace falta, o donde
+// hace falta:
 //
-// Enchufado pone `performance`; con bateria, `balanced`; por debajo del 15%,
-// `power-saver`. Bajo niri no hay nada que devuelva el perfil a su sitio al
-// enchufar el cargador, y quedarse en power-saver costaba 2.85x en multihilo
-// (16.0 vs 45.7 GB/s en openssl -multi 16). El script lleva la medicion entera
-// en la cabecera: ~/.config/niri/scripts/power-profile-auto.sh
+// - Vigilante de minimizar (scripts/niri-minimize-watch.sh): si una ventana
+//   minimizada recibe el foco (dock de DMS, Alt+Tab) la devuelve a su
+//   workspace de origen. Lo lanza niri-minimize.sh al minimizar y termina
+//   cuando ya no queda ninguna minimizada; antes eran ~20 MB residentes toda
+//   la sesión y tres forks por cada cambio de foco.
 //
-// La tecla XF86Launch1 (mas abajo, `dms ipc call powerprofile cycle`) sigue
-// mandando: el servicio solo escribe cuando cambia la fuente de energia, asi
-// que un cambio manual aguanta hasta que se conecte o desconecte el cargador.
+// - Saneo de audio (scripts/audio-init.sh): corrige el perfil de la tarjeta si
+//   WirePlumber restaura uno sin salida conectada y fija altavoz + micrófono
+//   interno por defecto. Es un arreglo de un portátil concreto: unidad
+//   audio-init.service, que se salta en cualquier otra placa.
+//
+// - Icono de bandeja de los túneles AWS SSM: unidad ssm-tray.service, que se
+//   salta donde ssm-tray no está instalado.
+//
+// - Perfil de energía automático: unidad power-profile-auto.service, porque
+//   cambiar el perfil necesita que polkit vea una sesión activa y porque así
+//   sobrevive a reiniciar el compositor. Enchufado pone `performance`; con
+//   batería, `balanced`; por debajo del 15%, `power-saver`. Quedarse en
+//   power-saver costaba 2.85x en multihilo (16.0 vs 45.7 GB/s en openssl
+//   -multi 16; medición entera en scripts/power-profile-auto.sh). Escucha
+//   eventos de upower en vez de sondear, y en un equipo sin batería se salta.
+//   La tecla XF86Launch1 (`dms ipc call powerprofile cycle`) sigue mandando:
+//   el servicio solo escribe cuando cambia la fuente de energía.
+//
+// Las tres unidades van atadas a graphical-session.target (dotfiles/systemd/).
+// ─────────────────────────────────────────────────────────────────────────────
 
 binds {
     // Keys consist of modifiers separated by + signs, followed by an XKB key name

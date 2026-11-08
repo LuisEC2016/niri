@@ -63,8 +63,9 @@ dos parches QML sobre DMS y unos ajustes:
   (145), `dockAutoHide`, `dockSmartAutoHide`, `dockIconSize` (52),
   `dockTransparency`, `dockBorder*`, `dockShowTrash`, iconos `WhiteSur-purple`.
 - `niri/config.kdl`: `layer-rule` que quita la sombra de niri a `dms:dock` (DMS
-  ya pinta la suya) y el vigilante que restaura una ventana minimizada al
-  pulsarla en el dock.
+  ya pinta la suya).
+- `niri/scripts/niri-minimize-watch.sh`: restaura una ventana minimizada al
+  pulsarla en el dock. Solo corre mientras hay alguna minimizada.
 
 El resto de parches: `05` OSD de volumen y brillo estilo macOS, `06` centro de
 control estilo macOS, `02` caché del mapa de categorías del lanzador, `04`
@@ -81,8 +82,29 @@ paquete ya está en 2.1.1, con otra estructura de archivos, y los parches no
 aplican sobre ella. Pasar a una versión nueva de DMS es portar los parches a
 mano y cambiar `DMS_TAG`/`DMS_COMMIT` en `build.sh`.
 
+## Procesos: ninguno al arrancar, cada uno cuando hace falta
+
+`config.kdl` no tiene `spawn-at-startup`. Lo que la sesión necesita arranca
+bajo demanda o como unidad de systemd que se salta donde no aplica, así que el
+mismo repo se instala en otro equipo sin arrastrar arreglos de este:
+
+| Qué | Cuándo corre | Fuera de este equipo |
+|---|---|---|
+| `niri-minimize-watch.sh` | desde que se minimiza una ventana hasta que no queda ninguna | igual |
+| `power-profile-auto.service` | toda la sesión, dormido hasta un evento de `upower --monitor` | se salta sin batería ni `powerprofilesctl` |
+| `audio-init.service` | una vez al entrar, y sale | se salta si la placa no es MS-15H4 |
+| `ssm-tray.service` | toda la sesión | se salta si no está `~/.local/bin/ssm-tray` |
+
+Antes, con la sesión en reposo: el vigilante de minimizar vivía siempre (bash
++ `niri msg event-stream`, ~20 MB) y lanzaba dos `jq` y el helper en cada
+cambio de foco; el perfil de energía leía sysfs cada 5 s con forks de `sleep`
+y `cat` (coreutils en Rust: ~8 MB por proceso). Medido el 2026-11-07.
+
 ## Fuera del repo
 
-- Se instalan aparte: `ssm-tray` (lo arranca `config.kdl`) y lo que usan los
-  scripts: `jq`, `pactl`, `inotifywait`, `notify-send`, `powerprofilesctl`.
+- Se instalan aparte: `ssm-tray` y lo que usan los scripts: `jq`, `pactl`,
+  `notify-send`, `fuzzel`, `upower`, `powerprofilesctl`, `python3`
+  (`toggle-touchpad.sh`), `setsid` y `flock` (util-linux).
 - `sony-wf-c710n-autoswitch.service` no tiene que ver con niri y no está aquí.
+  WirePlumber 0.5 ya hace ese cambio de perfil A2DP/HFP él solo
+  (`bluetooth.autoswitch-to-headset-profile`, activo por defecto).

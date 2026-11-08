@@ -1,0 +1,18 @@
+[Unit]
+Description=Saneo de audio al entrar (altavoz y micro internos)
+Documentation=file://%h/.config/niri/scripts/audio-init.sh
+# Arreglo de un portatil concreto (MSI Modern 15 H B13M, placa MS-15H4): el
+# script lleva fijos el nombre de la tarjeta y del perfil. En otro equipo la
+# unidad se salta sin arrancar nada.
+ConditionFirmware=smbios-field(board_name = MS-15H4)
+# Antes lo lanzaba config.kdl con spawn-at-startup; como unidad, config.kdl no
+# arranca ningun proceso y el arreglo no viaja a equipos donde no aplica.
+PartOf=graphical-session.target
+After=graphical-session.target pipewire-pulse.service wireplumber.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.config/niri/scripts/audio-init.sh
+
+[Install]
+WantedBy=graphical-session.target

@@ -37,6 +37,14 @@ if ! pactl info >/dev/null 2>&1; then
     exit 1
 fi
 
+# Arreglo de un portatil concreto: en cualquier otra tarjeta no se toca nada
+# (ni perfiles, ni volumenes, ni el mezclador de ALSA). La unidad ya se salta
+# fuera de ese equipo; esto cubre lanzarlo a mano.
+if ! pactl list short cards | grep -qF "$CARD_NAME"; then
+    log "no esta la tarjeta $CARD_NAME: nada que sanear"
+    exit 0
+fi
+
 # 2. Si no hay ningun sink analogico utilizable, forzar el perfil con altavoz.
 #    "Headphones" y "Speaker" viven en perfiles distintos porque la tarjeta usa
 #    UCM con split-enable, asi que la unica forma de recuperar el altavoz es

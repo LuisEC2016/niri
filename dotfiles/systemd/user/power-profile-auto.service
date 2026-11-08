@@ -5,15 +5,23 @@ Documentation=file://%h/.config/niri/scripts/power-profile-auto.sh
 # sesion activa; fuera de ella powerprofilesctl fallaria con "not authorized".
 PartOf=graphical-session.target
 After=graphical-session.target
+# El script sale con error si no puede fijar el perfil (polkit aun sin sesion
+# al entrar). Se reintenta, pero con tope: si power-profiles-daemon no esta, no
+# debe quedarse relanzandose cada 5 s, que seria volver a sondear.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
+# En un equipo sin cargador (sobremesa) o sin upower/powerprofilesctl el
+# servicio se salta: no queda en fallo, no se reintenta y no corre ExecStop.
+ExecCondition=%h/.config/niri/scripts/power-profile-auto.sh --comprobar
 ExecStart=%h/.config/niri/scripts/power-profile-auto.sh
 Restart=on-failure
 RestartSec=5
 # Al parar el servicio se deja el equipo en un perfil neutro en vez de en
 # performance, que es donde suele quedarse si se para estando enchufado.
-ExecStop=/usr/bin/powerprofilesctl set balanced
+ExecStop=-/usr/bin/powerprofilesctl set balanced
 Nice=10
 
 [Install]

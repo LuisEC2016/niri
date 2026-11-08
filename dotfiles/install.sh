@@ -92,12 +92,18 @@ do_config() {
     install_copy "$here/dms/settings.json" "$cfg/dms/settings.json"
     install_copy "$here/dms/plugin_settings.json" "$cfg/dms/plugin_settings.json"
 
-    install_copy "$here/systemd/user/power-profile-auto.service" \
-        "$cfg/systemd/user/power-profile-auto.service"
+    # config.kdl no lanza nada al arrancar: lo que necesita la sesión son
+    # unidades atadas a graphical-session.target, y cada una se salta sola en
+    # un equipo donde no aplica (sin batería, otra placa, sin ssm-tray), así
+    # que se habilitan todas sin preguntar por el hardware.
+    local units=(power-profile-auto.service audio-init.service ssm-tray.service)
+    for u in "${units[@]}"; do
+        install_copy "$here/systemd/user/$u" "$cfg/systemd/user/$u"
+    done
     install_copy "$here/systemd/user/dms.service.d/override.conf" \
         "$cfg/systemd/user/dms.service.d/override.conf"
     run systemctl --user daemon-reload
-    run systemctl --user enable power-profile-auto.service
+    run systemctl --user enable "${units[@]}"
 }
 
 do_dms_shell() {

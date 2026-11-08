@@ -5,14 +5,10 @@
 # capitalizado ("Normal", "_90"), asi que se normaliza antes de comparar.
 set -euo pipefail
 
-read -r out cur < <(niri msg --json outputs | python3 -c '
-import json, sys, subprocess
-name = json.loads(subprocess.run(
-    ["niri", "msg", "--json", "focused-output"],
-    capture_output=True, text=True).stdout)["name"]
-o = json.load(sys.stdin)[name]
-print(name, str(o["logical"].get("transform", "normal")).lower().lstrip("_"))
-')
+# Una sola consulta: focused-output ya trae su transform. Antes eran dos
+# `niri msg` y un python3 (~50 ms de arranque) por pulsación.
+read -r out cur < <(niri msg --json focused-output | jq -r '
+    "\(.name) \(.logical.transform // "Normal" | ascii_downcase | ltrimstr("_"))"')
 
 case "$cur" in
     normal) next=90 ;;

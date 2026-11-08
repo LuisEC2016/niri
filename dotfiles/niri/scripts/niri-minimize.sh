@@ -10,7 +10,17 @@
 set -euo pipefail
 
 STASH_WS="min"
-STACK="${XDG_RUNTIME_DIR:-/tmp}/niri-minimized"
+WATCHER="$(dirname "$(readlink -f "$0")")/niri-minimize-watch.sh"
+
+# Una pila por instancia de niri. $NIRI_SOCKET lleva el pid del compositor
+# (niri.wayland-1.<pid>.sock) y niri lo exporta a todo lo que lanza.
+# XDG_RUNTIME_DIR sobrevive a reiniciar niri sin cerrar sesión y los ids de
+# ventana vuelven a empezar en 1: una pila heredada "restauraría" ventanas
+# nuevas que no tienen nada que ver. Antes lo evitaba el vigilante vaciando la
+# pila al arrancar con la sesión; ahora el vigilante no arranca con la sesión.
+instance=${NIRI_SOCKET:-niri}
+instance=${instance##*/}
+STACK="${XDG_RUNTIME_DIR:-/tmp}/${instance%.sock}.minimized"
 
 touch "$STACK"
 
@@ -99,12 +109,28 @@ minimize_id() {
     ws_id=$(niri msg -j windows | jq -r --argjson i "$id" '.[] | select(.id == $i) | .workspace_id')
     [ -n "$ws_id" ] || exit 0
 
-    # Ya esta minimizada: no reapuntar el origen al propio almacen.
-    grep -qP "^${id}\t" "$STACK" && exit 0
+    # Ya esta minimizada: no reapuntar el origen al propio almacen. Si el
+    # vigilante murio por otra causa (kill, OOM), esto lo vuelve a levantar; si
+    # vive, el nuevo sale solo.
+    grep -qP "^${id}\t" "$STACK" && { start_watcher; exit 0; }
 
     ensure_stash
     niri msg action move-window-to-workspace --window-id "$id" --focus false "$STASH_WS"
     printf '%s\t%s\n' "$id" "$ws_id" >>"$STACK"
+    start_watcher
+}
+
+# El vigilante solo vive mientras hay ventanas minimizadas: se lanza aquí y
+# termina solo cuando la pila se vacía. Si ya hay uno, el nuevo sale al no
+# conseguir su cerrojo. Se lanza con el cerrojo de la pila tomado, y el
+# vigilante decide salir también con él tomado: o ve esta entrada, o ya ha
+# soltado el suyo y este arranca.
+#   setsid: grupo de procesos propio, para que al salir se lleve por delante su
+#           `niri msg event-stream` y su jq.
+#   9>&-:   sin esto heredaría el cerrojo de la pila y bloquearía todas las
+#           órdenes siguientes mientras viviera.
+start_watcher() {
+    setsid -f "$WATCHER" "$STACK" </dev/null 9>&- || true
 }
 
 # Devuelve la ventana $1 a su workspace de origen ($2). Si ese workspace ya no
