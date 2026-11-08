@@ -1639,6 +1639,13 @@ impl<W: LayoutElement> Workspace<W> {
         floating.chain(scrolling)
     }
 
+    /// Tiles in the same order as [`Self::tiles_with_ipc_layouts`], without computing layouts.
+    pub fn tiles_in_ipc_order(&self) -> impl Iterator<Item = &Tile<W>> {
+        let scrolling = self.scrolling.tiles();
+        let floating = self.floating.tiles();
+        floating.chain(scrolling)
+    }
+
     pub fn active_window_visual_rectangle(&self) -> Option<Rectangle<f64, Logical>> {
         if self.floating_is_active.get() {
             self.floating.active_window_visual_rectangle()

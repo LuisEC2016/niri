@@ -1,4 +1,3 @@
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -110,51 +109,75 @@ pub fn refresh(state: &mut State) {
     let protocol_state = &mut state.niri.foreign_toplevel_state;
 
     // Handle closed windows.
-    protocol_state.toplevels.retain(|surface, data| {
-        if state.niri.layout.find_window_and_output(surface).is_some() {
-            return true;
+    //
+    // This runs on every event loop iteration, so first check in linear time whether any tracked
+    // toplevel is gone. Layout windows have distinct surfaces, so every tracked toplevel is still
+    // in the layout exactly when the count of tracked layout windows matches the map size.
+    let mut tracked_in_layout = 0;
+    state.niri.layout.with_windows_and_outputs(|mapped, _| {
+        if protocol_state
+            .toplevels
+            .contains_key(mapped.toplevel().wl_surface())
+        {
+            tracked_in_layout += 1;
         }
-
-        for instance in data.ext_list_instances.iter() {
-            instance.closed();
-        }
-
-        for instance in data.wlr_management_instances.keys() {
-            instance.closed();
-        }
-
-        false
     });
+
+    if tracked_in_layout != protocol_state.toplevels.len() {
+        protocol_state.toplevels.retain(|surface, data| {
+            if state.niri.layout.find_window_and_output(surface).is_some() {
+                return true;
+            }
+
+            for instance in data.ext_list_instances.iter() {
+                instance.closed();
+            }
+
+            for instance in data.wlr_management_instances.keys() {
+                instance.closed();
+            }
+
+            false
+        });
+    }
+    debug_assert!(protocol_state.toplevels.keys().all(|surface| state
+        .niri
+        .layout
+        .find_window_and_output(surface)
+        .is_some()));
 
     // Handle new and existing windows.
     //
     // Save the focused window for last, this way when the focus changes, we will first deactivate
     // the previous window and only then activate the newly focused window.
     let mut focused = None;
-    state.niri.layout.with_windows(|mapped, output, _, _| {
-        let toplevel = mapped.toplevel();
-        let wl_surface = toplevel.wl_surface();
-        with_toplevel_role_and_current(toplevel, |role, cur| {
-            let Some(cur) = cur else {
-                error!("mapped must have had initial commit");
-                return;
-            };
+    state
+        .niri
+        .layout
+        .with_windows_and_outputs(|mapped, output| {
+            let toplevel = mapped.toplevel();
+            let wl_surface = toplevel.wl_surface();
+            with_toplevel_role_and_current(toplevel, |role, cur| {
+                let Some(cur) = cur else {
+                    error!("mapped must have had initial commit");
+                    return;
+                };
 
-            if state.niri.keyboard_focus.surface() == Some(wl_surface) {
-                focused = Some((mapped.id(), mapped.window.clone(), output.cloned()));
-            } else {
-                refresh_toplevel(
-                    protocol_state,
-                    wl_surface,
-                    mapped.id(),
-                    role,
-                    cur,
-                    output,
-                    false,
-                );
-            }
+                if state.niri.keyboard_focus.surface() == Some(wl_surface) {
+                    focused = Some((mapped.id(), mapped.window.clone(), output.cloned()));
+                } else {
+                    refresh_toplevel(
+                        protocol_state,
+                        wl_surface,
+                        mapped.id(),
+                        role,
+                        cur,
+                        output,
+                        false,
+                    );
+                }
+            });
         });
-    });
 
     // Finally, refresh the focused window.
     if let Some((identifier, window, output)) = focused {
@@ -215,11 +238,11 @@ fn refresh_toplevel(
 ) {
     let states = to_state_vec(&current.states, has_focus);
 
-    match protocol_state.toplevels.entry(wl_surface.clone()) {
-        Entry::Occupied(entry) => {
+    // Look up by reference: this runs for every window on every refresh, and the surface only
+    // needs to be cloned when we start tracking a new window.
+    match protocol_state.toplevels.get_mut(wl_surface) {
+        Some(data) => {
             // Existing window, check if anything changed.
-            let data = entry.into_mut();
-
             let mut new_title = None;
             if data.title != role.title {
                 data.title.clone_from(&role.title);
@@ -301,7 +324,7 @@ fn refresh_toplevel(
                 outputs.retain(|x| x.is_alive());
             }
         }
-        Entry::Vacant(entry) => {
+        None => {
             // New window, start tracking it.
             let mut data = ToplevelData {
                 identifier,
@@ -325,7 +348,7 @@ fn refresh_toplevel(
                 }
             }
 
-            entry.insert(data);
+            protocol_state.toplevels.insert(wl_surface.clone(), data);
         }
     }
 }

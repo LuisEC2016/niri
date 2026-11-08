@@ -605,17 +605,17 @@ impl State {
         let focused_ws_id = layout.active_workspace().map(|ws| ws.id().get());
 
         // Check for workspace changes.
-        let mut seen = HashSet::new();
+        let mut seen_count = 0;
         let mut need_workspaces_changed = false;
         for (mon, ws_idx, ws) in layout.workspaces() {
             let id = ws.id().get();
-            seen.insert(id);
 
             let Some(ipc_ws) = state.workspaces.get(&id) else {
                 // A new workspace was added.
                 need_workspaces_changed = true;
                 break;
             };
+            seen_count += 1;
 
             // Check for any changes that we can't signal as individual events.
             let output_name = mon.map(|mon| mon.output_name());
@@ -655,10 +655,19 @@ impl State {
             }
         }
 
-        // Check if any workspaces were removed.
-        if !need_workspaces_changed && state.workspaces.keys().any(|id| !seen.contains(id)) {
+        // Check if any workspaces were removed. If we didn't break out above, every layout
+        // workspace is in the state, and their IDs are unique, so some workspace was removed
+        // exactly when the state has more entries. This avoids allocating a set on every refresh.
+        if !need_workspaces_changed && state.workspaces.len() != seen_count {
             need_workspaces_changed = true;
         }
+        debug_assert!(
+            need_workspaces_changed
+                || state
+                    .workspaces
+                    .keys()
+                    .all(|id| layout.workspaces().any(|(_, _, ws)| ws.id().get() == *id))
+        );
 
         if need_workspaces_changed {
             events.clear();
@@ -705,11 +714,10 @@ impl State {
         let mut batch_change_layouts: Vec<(u64, WindowLayout)> = Vec::new();
 
         // Check for window changes.
-        let mut seen = HashSet::new();
+        let mut seen_count = 0;
         let mut focused_id = None;
         layout.with_windows(|mapped, _, ws_id, window_layout| {
             let id = mapped.id().get();
-            seen.insert(id);
 
             if mapped.is_focused() {
                 focused_id = Some(id);
@@ -720,6 +728,7 @@ impl State {
                 events.push(Event::WindowOpenedOrChanged { window });
                 return;
             };
+            seen_count += 1;
 
             let workspace_id = ws_id.map(|id| id.get());
             let mut changed =
@@ -768,10 +777,26 @@ impl State {
             });
         }
 
-        // Check for closed windows.
+        // Check for closed windows. Window IDs are unique, so some window was closed exactly when
+        // the state has windows that we didn't see in the layout. Only then build the set of
+        // layout windows, to avoid allocating it on every refresh.
+        let seen = (seen_count != state.windows.len()).then(|| {
+            let mut seen = HashSet::new();
+            layout.with_windows_and_outputs(|mapped, _| {
+                seen.insert(mapped.id().get());
+            });
+            seen
+        });
+        debug_assert!(
+            seen.is_some()
+                || state
+                    .windows
+                    .keys()
+                    .all(|id| layout.windows().any(|(_, win)| win.id().get() == *id))
+        );
         let mut ipc_focused_id = None;
         for (id, ipc_win) in &state.windows {
-            if !seen.contains(id) {
+            if seen.as_ref().is_some_and(|seen| !seen.contains(id)) {
                 events.push(Event::WindowClosed { id: *id });
             }
 

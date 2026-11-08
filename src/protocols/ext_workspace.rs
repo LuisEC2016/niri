@@ -11,7 +11,7 @@
 //! - Workspace name: name for named workspaces, index for unnamed.
 
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::mem;
 
 use arrayvec::ArrayVec;
@@ -95,21 +95,39 @@ pub fn refresh(state: &mut State) {
     let mut changed = false;
 
     // Remove workspaces that no longer exist (sending workspace_leave to workspace groups).
-    let mut seen_workspaces = HashMap::new();
-    for (mon, _, ws) in state.niri.layout.workspaces() {
-        let output = mon.map(|mon| mon.output());
-        seen_workspaces.insert(ws.id(), output);
+    //
+    // Workspace IDs are unique, so some tracked workspace is gone exactly when fewer layout
+    // workspaces are tracked than the map holds. Only then build the set, to avoid allocating it
+    // on every refresh.
+    let tracked_in_layout = state
+        .niri
+        .layout
+        .workspaces()
+        .filter(|(_, _, ws)| protocol_state.workspaces.contains_key(&ws.id()))
+        .count();
+    if tracked_in_layout != protocol_state.workspaces.len() {
+        let seen_workspaces: HashSet<_> = state
+            .niri
+            .layout
+            .workspaces()
+            .map(|(_, _, ws)| ws.id())
+            .collect();
+
+        protocol_state.workspaces.retain(|id, workspace| {
+            if seen_workspaces.contains(id) {
+                return true;
+            }
+
+            remove_workspace_instances(&protocol_state.workspace_groups, workspace);
+            changed = true;
+            false
+        });
     }
-
-    protocol_state.workspaces.retain(|id, workspace| {
-        if seen_workspaces.contains_key(id) {
-            return true;
-        }
-
-        remove_workspace_instances(&protocol_state.workspace_groups, workspace);
-        changed = true;
-        false
-    });
+    debug_assert!(protocol_state.workspaces.keys().all(|id| state
+        .niri
+        .layout
+        .workspaces()
+        .any(|(_, _, ws)| ws.id() == *id)));
 
     // Remove workspace groups for outputs that no longer exist.
     protocol_state.workspace_groups.retain(|output, data| {

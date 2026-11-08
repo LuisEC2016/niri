@@ -1,4 +1,3 @@
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::time::Duration;
@@ -472,32 +471,43 @@ impl State {
 
 impl Niri {
     pub fn refresh_mapped_cast_outputs(&mut self) {
-        let mut seen = HashSet::new();
         let mut output_changed = vec![];
 
-        self.layout.with_windows(|mapped, output, _, _| {
-            seen.insert(mapped.window.clone());
-
+        // This runs on every event loop iteration, so in the common case don't clone windows or
+        // build a set. Layout windows are distinct, so no tracked window is gone exactly when the
+        // count of tracked layout windows matches the map size.
+        let mapped_cast_output = &mut self.casting.mapped_cast_output;
+        let mut tracked_in_layout = 0;
+        self.layout.with_windows_and_outputs(|mapped, output| {
             let Some(output) = output else {
+                if mapped_cast_output.contains_key(&mapped.window) {
+                    tracked_in_layout += 1;
+                }
                 return;
             };
 
-            match self.casting.mapped_cast_output.entry(mapped.window.clone()) {
-                Entry::Occupied(mut entry) => {
-                    if entry.get() != output {
-                        entry.insert(output.clone());
-                        output_changed.push((mapped.id(), output.clone()));
-                    }
+            tracked_in_layout += 1;
+            if let Some(current) = mapped_cast_output.get_mut(&mapped.window) {
+                if current != output {
+                    *current = output.clone();
+                    output_changed.push((mapped.id(), output.clone()));
                 }
-                Entry::Vacant(entry) => {
-                    entry.insert(output.clone());
-                }
+            } else {
+                mapped_cast_output.insert(mapped.window.clone(), output.clone());
             }
         });
 
-        self.casting
-            .mapped_cast_output
-            .retain(|win, _| seen.contains(win));
+        if tracked_in_layout != mapped_cast_output.len() {
+            let mut seen = HashSet::new();
+            self.layout.with_windows_and_outputs(|mapped, _| {
+                seen.insert(mapped.window.clone());
+            });
+            mapped_cast_output.retain(|win, _| seen.contains(win));
+        }
+        debug_assert!(mapped_cast_output.keys().all(|win| self
+            .layout
+            .windows()
+            .any(|(_, mapped)| mapped.window == *win)));
 
         let mut to_stop = vec![];
         for (id, out) in output_changed {

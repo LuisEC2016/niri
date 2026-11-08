@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::cmp::{max, min};
 use std::ffi::{CString, OsStr};
@@ -381,6 +382,41 @@ pub fn with_toplevel_role_and_current<T>(
 
         f(&mut role, current)
     })
+}
+
+/// Gives free memory held by the C allocator back to the OS.
+///
+/// glibc only returns memory at the top of the heap by itself; this also releases the free pages
+/// in the middle of it. A no-op with other C libraries.
+pub fn trim_heap() {
+    let _span = tracy_client::span!("trim_heap");
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim() has no preconditions.
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
+/// Borrowing version of [`XdgToplevelSurfaceRoleAttributes::current_server_state`].
+///
+/// Smithay's method returns a clone, which allocates for the states set. The configure checks
+/// run for every window on every event loop iteration, so they compare against a borrow instead.
+pub fn current_server_state(role: &XdgToplevelSurfaceRoleAttributes) -> Cow<'_, ToplevelState> {
+    let state = role
+        .pending_configures()
+        .last()
+        .map(|c| &c.state)
+        .or_else(|| role.last_acked.as_ref().map(|c| &c.state));
+
+    let rv = match state {
+        Some(state) => Cow::Borrowed(state),
+        None => Cow::Owned(ToplevelState::default()),
+    };
+
+    debug_assert!(*rv == role.current_server_state());
+
+    rv
 }
 
 pub fn with_toplevel_last_uncommitted_configure<T>(

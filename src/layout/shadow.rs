@@ -11,6 +11,20 @@ pub struct Shadow {
     shader_rects: Vec<Rectangle<f64, Logical>>,
     shaders: Vec<ShadowRenderElement>,
     config: niri_config::Shadow,
+    /// Arguments of the last [`Self::update_render_elements`] that computed the elements.
+    ///
+    /// The elements only depend on these and on the config, and they are updated every frame for
+    /// every tile, so this lets us skip recomputing (and reallocating) them when nothing changed.
+    last_params: Option<Parameters>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Parameters {
+    win_size: Size<f64, Logical>,
+    is_active: bool,
+    radius: CornerRadius,
+    scale: f64,
+    alpha: f32,
 }
 
 impl Shadow {
@@ -19,11 +33,13 @@ impl Shadow {
             shader_rects: Vec::new(),
             shaders: Vec::new(),
             config,
+            last_params: None,
         }
     }
 
     pub fn update_config(&mut self, config: niri_config::Shadow) {
         self.config = config;
+        self.last_params = None;
     }
 
     pub fn update_shaders(&mut self) {
@@ -40,6 +56,24 @@ impl Shadow {
         scale: f64,
         alpha: f32,
     ) {
+        // Nothing reads the elements while the shadow is off, and turning it on goes through
+        // update_config(), which resets last_params.
+        if !self.config.on {
+            return;
+        }
+
+        let params = Parameters {
+            win_size,
+            is_active,
+            radius,
+            scale,
+            alpha,
+        };
+        if self.last_params == Some(params) {
+            return;
+        }
+        self.last_params = Some(params);
+
         let ceil = |logical: f64| (logical * scale).ceil() / scale;
 
         // All of this stuff should end up aligned to physical pixels because:

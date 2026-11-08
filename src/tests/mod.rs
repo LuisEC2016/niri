@@ -10,6 +10,7 @@ mod binds;
 mod floating;
 mod fullscreen;
 mod layer_shell;
+mod refresh;
 mod remove_output;
 mod transactions;
 mod virtual_pointer;

@@ -1719,6 +1719,35 @@ impl<W: LayoutElement> Layout<W> {
         moving_window.chain(mon_windows)
     }
 
+    /// Like [`Self::with_windows`], but without computing the IPC window layouts.
+    ///
+    /// Visits the windows in the same order. Computing the layouts is comparatively expensive, and
+    /// several callers run on every event loop iteration without needing them.
+    pub fn with_windows_and_outputs(&self, mut f: impl FnMut(&W, Option<&Output>)) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
+            f(move_.tile.window(), Some(&move_.output));
+        }
+
+        match &self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => {
+                for mon in monitors {
+                    for ws in &mon.workspaces {
+                        for tile in ws.tiles_in_ipc_order() {
+                            f(tile.window(), Some(&mon.output));
+                        }
+                    }
+                }
+            }
+            MonitorSet::NoOutputs { workspaces } => {
+                for ws in workspaces {
+                    for tile in ws.tiles_in_ipc_order() {
+                        f(tile.window(), None);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn with_windows(
         &self,
         mut f: impl FnMut(&W, Option<&Output>, Option<WorkspaceId>, WindowLayout),

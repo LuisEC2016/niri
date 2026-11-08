@@ -152,7 +152,12 @@ collapsible_match = "allow"
 [profile.release]
 debug = "line-tables-only"
 overflow-checks = true
-lto = "thin"
+# Whole-program optimization. Measured against lto = "thin" with the default codegen units: the
+# text segment shrinks from 27.9 to 23.3 MB and the headless refresh/render bench runs 3-8% faster.
+# The cost is a single-threaded link: a clean release build takes ~4.5 instead of ~2 minutes and
+# peaks at ~4.5 GB of RAM.
+lto = "fat"
+codegen-units = 1
 
 [profile.release.package.niri-config]
 # knuffel with chomsky generates a metric ton of debuginfo.

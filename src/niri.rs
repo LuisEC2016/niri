@@ -193,7 +193,7 @@ use crate::utils::xwayland::satellite::Satellite;
 use crate::utils::{
     center, center_f64, get_monotonic_time, ipc_transform_to_smithay, is_mapped, logical_output,
     make_screenshot_path, output_matches_name, output_size, panel_orientation,
-    send_scale_transform, winit_scale, write_png_rgba8, xwayland,
+    send_scale_transform, trim_heap, winit_scale, write_png_rgba8, xwayland,
 };
 use crate::window::mapped::{MappedId, WindowCastRenderElements};
 use crate::window::{InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped, WindowRef};
@@ -204,6 +204,11 @@ const CLEAR_COLOR_LOCKED: [f32; 4] = [0.3, 0.1, 0.1, 1.];
 // second, so with the worst timing the maximum interval between two frame callbacks for a surface
 // should be ~1.995 seconds.
 const FRAME_CALLBACK_THROTTLE: Option<Duration> = Some(Duration::from_millis(995));
+
+/// How long after rendering to give freed heap memory back to the OS.
+///
+/// See [`Niri::schedule_heap_trim`].
+const HEAP_TRIM_DELAY: Duration = Duration::from_secs(30);
 
 /// Parts of the seat keyboard state that get reset when its keymap is replaced.
 #[derive(Debug, Clone, Copy, Default)]
@@ -423,6 +428,8 @@ pub struct Niri {
     /// Used for limiting the notify to once per iteration, so that it's not spammed with high
     /// resolution mice.
     pub notified_activity_this_iteration: bool,
+    /// Whether a timer to trim the heap is pending, see [`Niri::schedule_heap_trim`].
+    heap_trim_scheduled: bool,
     pub pointer_inside_hot_corner: bool,
     pub pointer_constraint_position_hint: Option<Point<f64, Logical>>,
     pub tablet_cursor_location: Option<Point<f64, Logical>>,
@@ -552,6 +559,11 @@ pub struct OutputState {
     screen_transition: Option<ScreenTransition>,
     /// Damage tracker used for the debug damage visualization.
     pub debug_damage_tracker: OutputDamageTracker,
+    /// Number of render elements in the last [`Niri::render_to_vec`] call for this output.
+    ///
+    /// Render elements are large, so growing the vector from empty on every frame means several
+    /// reallocations and copies; this lets the next frame allocate once.
+    render_elements_len_hint: Cell<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -2972,6 +2984,7 @@ impl Niri {
             pointer_inactivity_timer: None,
             pointer_inactivity_timer_got_reset: false,
             notified_activity_this_iteration: false,
+            heap_trim_scheduled: false,
             pointer_inside_hot_corner: false,
             pointer_constraint_position_hint: None,
             tablet_cursor_location: None,
@@ -3284,6 +3297,7 @@ impl Niri {
             lock_color_buffer: SolidColorBuffer::new(size, CLEAR_COLOR_LOCKED),
             screen_transition: None,
             debug_damage_tracker: OutputDamageTracker::from_output(&output),
+            render_elements_len_hint: Cell::new(0),
         };
         let rv = self.output_state.insert(output.clone(), state);
         assert!(rv.is_none(), "output was already tracked");
@@ -4571,10 +4585,22 @@ impl Niri {
         output: &Output,
         include_pointer: bool,
     ) -> Vec<OutputRenderElements<R>> {
-        let mut elements = Vec::new();
+        let hint = self
+            .output_state
+            .get(output)
+            .map(|state| &state.render_elements_len_hint);
+
+        // A little slack, since the count differs slightly between callers (e.g. with and
+        // without the pointer).
+        let capacity = hint.map_or(0, |hint| hint.get() + 4);
+        let mut elements = Vec::with_capacity(capacity);
         self.render(ctx, output, include_pointer, &mut |elem| {
             elements.push(elem)
         });
+
+        if let Some(hint) = hint {
+            hint.set(elements.len());
+        }
         elements
     }
 
@@ -4994,6 +5020,28 @@ impl Niri {
         }
     }
 
+    /// Gives freed heap memory back to the OS some time after rendering.
+    ///
+    /// Rendering frees a lot of temporary memory, most of it in the GPU driver the first time
+    /// things get drawn, and glibc keeps it resident in the heap. Measured with the headless
+    /// renderer: trimming after a burst of frames dropped RssAnon by about 4 MB, the memory did
+    /// not come back with 300 more animated frames, and the trim took ~0.1 ms. With no rendering,
+    /// no timer is armed.
+    fn schedule_heap_trim(&mut self) {
+        if self.heap_trim_scheduled {
+            return;
+        }
+        self.heap_trim_scheduled = true;
+
+        self.event_loop
+            .insert_source(Timer::from_duration(HEAP_TRIM_DELAY), |_, _, state| {
+                state.niri.heap_trim_scheduled = false;
+                trim_heap();
+                TimeoutAction::Drop
+            })
+            .unwrap();
+    }
+
     fn redraw(&mut self, backend: &mut Backend, output: &Output) {
         let _span = tracy_client::span!("Niri::redraw");
 
@@ -5037,6 +5085,10 @@ impl Niri {
 
             // Render.
             res = backend.render(self, output, target_presentation_time);
+
+            if res != RenderResult::Skipped {
+                self.schedule_heap_trim();
+            }
         }
 
         let is_locked = self.is_locked();

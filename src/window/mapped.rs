@@ -42,7 +42,7 @@ use crate::render_helpers::{background_effect, BakedBuffer, RenderCtx};
 use crate::utils::id::IdCounter;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
-    get_credentials_for_surface, send_scale_transform, update_tiled_state,
+    current_server_state, get_credentials_for_surface, send_scale_transform, update_tiled_state,
     with_toplevel_last_uncommitted_configure, with_toplevel_role, with_toplevel_role_and_current,
     ResizeEdge,
 };
@@ -1022,11 +1022,11 @@ impl LayoutElement for Mapped {
 
         with_toplevel_role_and_current(self.toplevel(), |attributes, current_committed| {
             if let Some(server_pending) = &attributes.server_pending {
-                let current_server = attributes.current_server_state();
-                if *server_pending != current_server {
+                let current_server = current_server_state(attributes);
+                if *server_pending != *current_server {
                     // Something changed. Check if the only difference is the size, and if the
                     // current server size matches the current committed size.
-                    let mut current_server_same_size = current_server.clone();
+                    let mut current_server_same_size = current_server.clone().into_owned();
                     current_server_same_size.size = server_pending.size;
                     if current_server_same_size == *server_pending {
                         // Only the size changed. Check if the window committed our previous size
@@ -1083,7 +1083,7 @@ impl LayoutElement for Mapped {
                     return false;
                 }
 
-                let current_server_size = role.current_server_state().size;
+                let current_server_size = current_server_state(role).size;
                 let server_pending = role.server_pending.as_mut().unwrap();
 
                 // With UseWindowSize, we do not consider size-only changes, because we will
@@ -1093,7 +1093,7 @@ impl LayoutElement for Mapped {
                 }
 
                 let server_pending = role.server_pending.as_ref().unwrap();
-                *server_pending != role.current_server_state()
+                *server_pending != *current_server_state(role)
             });
 
         if has_pending_changes {
@@ -1258,7 +1258,7 @@ impl LayoutElement for Mapped {
             // If we have a server-pending size change that we haven't sent yet, use that size.
             let server_pending = role.server_pending.as_ref()?;
 
-            let current_server = role.current_server_state();
+            let current_server = current_server_state(&role);
             if server_pending.size != current_server.size {
                 return Some((
                     server_pending.size.unwrap_or_default(),
