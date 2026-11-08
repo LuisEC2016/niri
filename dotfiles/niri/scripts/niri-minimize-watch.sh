@@ -16,7 +16,8 @@
 
 set -uo pipefail
 
-HELPER="$(dirname "$(readlink -f "$0")")/niri-minimize.sh"
+self=$(readlink -f "$0")
+HELPER="${self%/*}/niri-minimize.sh"
 STACK=${1:?uso: $0 PILA}
 
 # Al salir se termina el grupo de procesos entero (el `niri msg` y el jq de

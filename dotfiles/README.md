@@ -100,11 +100,25 @@ Antes, con la sesión en reposo: el vigilante de minimizar vivía siempre (bash
 cambio de foco; el perfil de energía leía sysfs cada 5 s con forks de `sleep`
 y `cat` (coreutils en Rust: ~8 MB por proceso). Medido el 2026-11-07.
 
+Los scripts que corren por pulsación también lanzan los procesos justos
+(contados con `strace -f -e execve` contra un `niri` falso, 2026-11-07):
+
+| Orden | Antes | Ahora |
+|---|---|---|
+| `niri-minimize.sh minimize` | 20 | 11 |
+| `niri-minimize.sh restore-id` (clic en el dock) | 25 | 13 |
+| `niri-minimize.sh restore` | 31 | 14 |
+| `toggle-touchpad.sh` | 5, uno `python3` | 4, sin `python3` |
+| `video-hwdec.sh`, por muestra | ~300 (`grep` por descriptor) + `sleep` | 1 (`awk`) |
+
+Medido en este equipo: cada `niri msg` cuesta ~5 ms de CPU y cada `jq` o
+proceso de coreutils ~2 ms.
+
 ## Fuera del repo
 
 - Se instalan aparte: `ssm-tray` y lo que usan los scripts: `jq`, `pactl`,
-  `notify-send`, `fuzzel`, `upower`, `powerprofilesctl`, `python3`
-  (`toggle-touchpad.sh`), `setsid` y `flock` (util-linux).
+  `notify-send`, `fuzzel`, `upower`, `powerprofilesctl`, `setsid` y `flock`
+  (util-linux).
 - `sony-wf-c710n-autoswitch.service` no tiene que ver con niri y no está aquí.
   WirePlumber 0.5 ya hace ese cambio de perfil A2DP/HFP él solo
   (`bluetooth.autoswitch-to-headset-profile`, activo por defecto).

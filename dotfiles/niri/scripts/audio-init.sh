@@ -27,12 +27,28 @@ SOURCE_VOLUME="55%"
 
 log() { printf '[audio-init] %s\n' "$*"; }
 
+# Primera linea de $2 (salida de `pactl list short`) que contiene $3, campo 2
+# (el nombre) en la variable $1. Con builtins: el script corre al entrar en la
+# sesion y antes eran un pactl + grep/awk por cada consulta.
+first_name() {
+    local -n out=$1
+    local _id name _rest
+    out=
+    while read -r _id name _rest; do
+        if [[ "$_id $name $_rest" == *"$3"* ]]; then
+            out=$name
+            return
+        fi
+    done <<<"$2"
+}
+
 # 1. PipeWire puede tardar en levantar tras el login; sin esto pactl falla.
-for _ in $(seq 1 30); do
-    pactl info >/dev/null 2>&1 && break
+ready=0
+for ((i = 0; i < 30; i++)); do
+    pactl info >/dev/null 2>&1 && { ready=1; break; }
     sleep 0.5
 done
-if ! pactl info >/dev/null 2>&1; then
+if [ "$ready" -eq 0 ] && ! pactl info >/dev/null 2>&1; then
     log "pipewire no respondio tras 15s, se aborta"
     exit 1
 fi
@@ -40,7 +56,7 @@ fi
 # Arreglo de un portatil concreto: en cualquier otra tarjeta no se toca nada
 # (ni perfiles, ni volumenes, ni el mezclador de ALSA). La unidad ya se salta
 # fuera de ese equipo; esto cubre lanzarlo a mano.
-if ! pactl list short cards | grep -qF "$CARD_NAME"; then
+if [[ $(pactl list short cards) != *"$CARD_NAME"* ]]; then
     log "no esta la tarjeta $CARD_NAME: nada que sanear"
     exit 0
 fi
@@ -49,14 +65,16 @@ fi
 #    "Headphones" y "Speaker" viven en perfiles distintos porque la tarjeta usa
 #    UCM con split-enable, asi que la unica forma de recuperar el altavoz es
 #    cambiar el perfil entero.
-if ! pactl list short sinks | grep -q "HiFi__Speaker__sink"; then
+sinks=$(pactl list short sinks)
+if [[ $sinks != *HiFi__Speaker__sink* ]]; then
     log "sin sink de altavoz; cambiando a perfil $SPEAKER_PROFILE"
     pactl set-card-profile "$CARD_NAME" "$SPEAKER_PROFILE" || log "fallo al fijar perfil"
     sleep 1
+    sinks=$(pactl list short sinks)
 fi
 
-sink=$(pactl list short sinks | awk '/HiFi__Speaker__sink/ {print $2; exit}')
-source=$(pactl list short sources | awk '/HiFi__Mic1__source/ {print $2; exit}')
+first_name sink "$sinks" HiFi__Speaker__sink
+first_name source "$(pactl list short sources)" HiFi__Mic1__source
 
 # 3. Fijar los dispositivos por defecto. Las apps que usan "Same as System"
 #    (Zoom, Slack, Chromium) siguen este valor.
@@ -81,9 +99,11 @@ fi
 # 4. Los HDMI arrancan muteados a 0 si se dejaron asi en otra sesion; al
 #    conectar un monitor con altavoces el usuario no oiria nada y el mute no es
 #    visible en el OSD hasta seleccionarlo.
-pactl list short sinks | awk '/HDMI/ {print $2}' | while read -r hdmi; do
-    pactl set-sink-mute "$hdmi" 0
-done
+#    La lista de sinks es la de arriba: fijar el defecto, el mute y el volumen
+#    no la cambia.
+while read -r _ hdmi rest; do
+    [[ "$hdmi $rest" == *HDMI* ]] && pactl set-sink-mute "$hdmi" 0
+done <<<"$sinks"
 
 # 5. Auto-Mute Mode conmuta altavoz/auriculares en el codec al detectar el jack.
 #    Viene deshabilitado en esta placa y sin el suenan los dos a la vez.

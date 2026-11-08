@@ -16,12 +16,26 @@ set -euo pipefail
 
 PATRON="${1:-chrome}"
 INTERVALO="${2:-3}"
+# read -t no falla con un intervalo raro como fallaba sleep: daria vueltas sin
+# esperar. Segundos, con decimales si se quiere, y mayor que cero.
+if ! [[ $INTERVALO =~ ^[0-9]*\.?[0-9]+$ && $INTERVALO =~ [1-9] ]]; then
+    echo "Intervalo no valido: '$INTERVALO' (segundos, mayor que 0)." >&2
+    exit 2
+fi
 
+# Se lee con builtins: el proceso GPU de Chrome tiene ~150 descriptores, y un
+# grep por descriptor eran ~300 procesos por muestra; la herramienta de medir
+# se comia la CPU que estaba midiendo. Un descriptor que se cierra a mitad de
+# la lectura no cuenta, igual que antes.
 engine_ns() {
-    local pid=$1 total=0 v
+    local pid=$1 total=0 fd key val _
     for fd in /proc/"$pid"/fdinfo/*; do
-        v=$(grep -m1 '^drm-engine-video:' "$fd" 2>/dev/null | grep -oE '[0-9]+' || true)
-        [ -n "$v" ] && total=$((total + v))
+        while read -r key val _; do
+            if [ "$key" = "drm-engine-video:" ]; then
+                total=$((total + val))
+                break
+            fi
+        done 2>/dev/null <"$fd" || true
     done
     echo "$total"
 }
@@ -48,7 +62,11 @@ fi
 echo "Vigilando pid $PID ($PATRON), muestras cada ${INTERVALO}s. Ctrl-C para salir."
 echo
 ANT=$(engine_ns "$PID")
-while sleep "$INTERVALO"; do
+# Espera con read -t sobre una tuberia que nadie escribe, en vez de un `sleep`
+# por muestra (coreutils en Rust, ~8 MB por proceso).
+exec 3<> <(:)
+while :; do
+    read -r -t "$INTERVALO" -u 3 _ || true
     [ -d /proc/"$PID" ] || { echo "El proceso $PID ha terminado."; exit 0; }
     ACT=$(engine_ns "$PID")
     DELTA=$(( ACT - ANT ))
