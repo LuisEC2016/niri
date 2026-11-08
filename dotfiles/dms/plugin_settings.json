@@ -1,0 +1,27 @@
+{
+  "bongoCat": {
+    "enabled": false
+  },
+  "dmsThemeSync": {
+    "enabled": true,
+    "folderColorBaseThemeDark": "",
+    "folderColorBaseThemeLight": "",
+    "folderColorBaseTheme": "",
+    "syncTerminalFonts": false,
+    "regularFontSize": 11,
+    "monoFontSize": 13,
+    "documentFontSize": 11
+  },
+  "dankPomodoroTimer": {
+    "enabled": true
+  },
+  "catWidget": {
+    "enabled": false
+  },
+  "wallpaperCarousel": {
+    "enabled": true
+  },
+  "webcamToggle": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,48 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Ideas tomadas de iNiR (github.com/snowarch/iNiR @ 9574fa4, 2026-09-19),
+// defaults/niri/config.d/20-layout-and-overview.kdl y 80-layer-rules.kdl.
+// Se incluye después de pulido.kdl. Lo demás de iNiR ya estaba cubierto aquí
+// o peor: su opacidad 0.9 en ventanas inactivas difumina el texto entero (ver
+// blur.kdl), gaps 25 rompe el strut de appearance.kdl, y sus animaciones son
+// las de fábrica con slowdown 1.2.
+// ─────────────────────────────────────────────────────────────────────────────
+
+layout {
+    // Una sola columna en el workspace va al centro, no pegada a la izquierda.
+    // Con default-column-width 0.5 una ventana sola dejaba media pantalla de
+    // wallpaper a la derecha.
+    always-center-single-column
+}
+
+// Vidrio real en lo que DMS pone ENCIMA de las ventanas: dock (autohide, tapa
+// ventanas), control center, popouts, notificaciones, OSD, spotlight.
+// Por defecto una layer surface con blur usa xray: difumina sólo el wallpaper
+// y, sobre una ventana, enseña el fondo en vez de lo que hay debajo. Con
+// `xray false` difumina lo que realmente queda detrás, como macOS.
+// Coste: se recalcula cuando cambia lo de debajo, en vez de reutilizarse.
+// La limitación experimental del wiki (Window-Effects.md: desaparece al
+// abrir/cerrar y al arrastrar) es de ventanas; aquí sólo hay layer surfaces.
+// Sin efecto en superficies que no piden blur, así que el match amplio es
+// inocuo. Se excluye el wallpaper difuminado: es el propio fondo.
+layer-rule {
+    match namespace="^dms:"
+    exclude namespace="^dms:blurwallpaper$"
+    background-effect {
+        xray false
+    }
+}
+
+// Privacidad al compartir pantalla (idea del ejemplo `block-out-from` de
+// 80-layer-rules.kdl de iNiR). Lo que DMS pinta con contenido personal no sale
+// en un screencast de Meet/Slack/OBS: popups y centro de notificaciones, el
+// historial del portapapeles, la clave y el QR del wifi y el diálogo de polkit.
+// En el stream quedan como un rectángulo negro; en pantalla se ven igual.
+// "screencast" y no "screen-capture": las capturas propias (Mod+S, Print) las
+// siguen incluyendo.
+layer-rule {
+    match namespace="^dms:notification-(popup|center-popout|center-modal|context-menu)$"
+    match namespace="^dms:clipboard(-popout|-context-menu)?$"
+    match namespace="^dms:wifi-(password|qrcode)$"
+    match namespace="^dms:polkit-auth-surface$"
+    block-out-from "screencast"
+}

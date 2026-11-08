@@ -1,0 +1,888 @@
+--- a/Modules/ControlCenter/Widgets/AudioSliderRow.qml
++++ b/Modules/ControlCenter/Widgets/AudioSliderRow.qml
+@@ -3,7 +3,7 @@
+ import qs.Services
+ import qs.Widgets
+ 
+-Row {
++Item {
+     id: root
+ 
+     LayoutMirroring.enabled: I18n.isRtl
+@@ -13,77 +13,37 @@
+     property color sliderTrackColor: "transparent"
+     property real sliderTrackOpacity: Theme.ccSliderTrackOpacity
+ 
+-    height: 40
+-    spacing: 0
++    height: 26
+ 
+-    Rectangle {
+-        width: Theme.iconSize + Theme.spacingS * 2
+-        height: Theme.iconSize + Theme.spacingS * 2
+-        anchors.verticalCenter: parent.verticalCenter
+-        radius: (Theme.iconSize + Theme.spacingS * 2) / 2
+-        color: iconArea.containsMouse ? Theme.primaryHover : Theme.withAlpha(Theme.primary, 0)
+-
+-        DankRipple {
+-            id: iconRipple
+-            cornerRadius: parent.radius
+-        }
+-
+-        MouseArea {
+-            id: iconArea
+-            anchors.fill: parent
+-            visible: defaultSink !== null
+-            hoverEnabled: true
+-            cursorShape: Qt.PointingHandCursor
+-            onPressed: mouse => iconRipple.trigger(mouse.x, mouse.y)
+-            onClicked: {
+-                if (defaultSink?.audio) {
+-                    SessionData.suppressOSDTemporarily();
+-                    defaultSink.audio.muted = !defaultSink.audio.muted;
+-                }
+-            }
+-        }
+-
+-        DankIcon {
+-            anchors.centerIn: parent
+-            name: AudioService.volumeIconName(defaultSink)
+-            size: Theme.iconSize
+-            color: defaultSink?.audio && !defaultSink.audio.muted && defaultSink.audio.volume > 0 ? Theme.primary : Theme.surfaceText
+-        }
+-    }
+-
+-    DankSlider {
++    CcMacSlider {
+         id: volumeSlider
+ 
+-        readonly property real actualVolumePercent: defaultSink?.audio ? Math.round(defaultSink.audio.volume * 100) : 0
++        property int liveValue: -1
+ 
+-        anchors.verticalCenter: parent.verticalCenter
+-        width: parent.width - (Theme.iconSize + Theme.spacingS * 2)
++        anchors.fill: parent
+         enabled: defaultSink?.audio != null
++        iconName: AudioService.volumeIconName(defaultSink)
++        iconInteractive: defaultSink?.audio != null
++        muted: !!defaultSink?.audio?.muted
+         minimum: 0
+         maximum: AudioService.sinkMaxVolume
+-        showValue: true
+-        unit: "%"
+-        valueOverride: actualVolumePercent
+-        thumbOutlineColor: Theme.surfaceContainer
+-        trackColor: root.sliderTrackColor.a > 0 ? root.sliderTrackColor : Theme.ccSliderTrackColor
+-        trackOpacity: root.sliderTrackOpacity
+-
+-        onSliderValueChanged: function (newValue) {
++        value: isDragging && liveValue >= 0 ? liveValue : (defaultSink?.audio ? Math.min(AudioService.sinkMaxVolume, Math.round(defaultSink.audio.volume * 100)) : 0)
++        onIsDraggingChanged: if (!isDragging) liveValue = -1
++        onIconClicked: {
+             if (defaultSink?.audio) {
+                 SessionData.suppressOSDTemporarily();
+-                defaultSink.audio.volume = newValue / 100.0;
+-                if (newValue > 0 && defaultSink.audio.muted) {
+-                    defaultSink.audio.muted = false;
+-                }
+-                AudioService.playVolumeChangeSoundIfEnabled();
++                defaultSink.audio.muted = !defaultSink.audio.muted;
+             }
+         }
+-    }
+-
+-    Binding {
+-        target: volumeSlider
+-        property: "value"
+-        value: defaultSink?.audio ? Math.min(AudioService.sinkMaxVolume, Math.round(defaultSink.audio.volume * 100)) : 0
+-        when: !volumeSlider.isDragging
++        onMoved: newValue => {
++            if (!defaultSink?.audio)
++                return;
++            liveValue = newValue;
++            SessionData.suppressOSDTemporarily();
++            defaultSink.audio.volume = newValue / 100.0;
++            if (newValue > 0 && defaultSink.audio.muted)
++                defaultSink.audio.muted = false;
++            AudioService.playVolumeChangeSoundIfEnabled();
++        }
+     }
+ }
+--- a/Modules/ControlCenter/Widgets/BrightnessSliderRow.qml
++++ b/Modules/ControlCenter/Widgets/BrightnessSliderRow.qml
+@@ -4,7 +4,7 @@
+ import qs.Services
+ import qs.Widgets
+ 
+-Row {
++Item {
+     id: root
+ 
+     LayoutMirroring.enabled: I18n.isRtl
+@@ -19,12 +19,7 @@
+ 
+     signal iconClicked
+ 
+-    height: 40
+-    spacing: 0
+-
+-    DankTooltipV2 {
+-        id: sharedTooltip
+-    }
++    height: 26
+ 
+     property string targetDeviceName: {
+         if (!DisplayService.brightnessAvailable || !DisplayService.devices || DisplayService.devices.length === 0) {
+@@ -89,71 +84,26 @@
+         return DisplayService.getDeviceBrightness(targetDeviceName);
+     }
+ 
+-    Rectangle {
+-        width: Theme.iconSize + Theme.spacingS * 2
+-        height: Theme.iconSize + Theme.spacingS * 2
+-        anchors.verticalCenter: parent.verticalCenter
+-        radius: (Theme.iconSize + Theme.spacingS * 2) / 2
+-        color: iconArea.containsMouse ? Theme.primaryHover : Theme.withAlpha(Theme.primary, 0)
+-
+-        DankRipple {
+-            id: iconRipple
+-            cornerRadius: parent.radius
+-        }
+-
+-        MouseArea {
+-            id: iconArea
+-            anchors.fill: parent
+-            hoverEnabled: true
+-            cursorShape: DisplayService.devices && DisplayService.devices.length > 1 ? Qt.PointingHandCursor : Qt.ArrowCursor
+-
+-            onPressed: mouse => iconRipple.trigger(mouse.x, mouse.y)
+-            onClicked: {
+-                if (DisplayService.devices && DisplayService.devices.length > 1) {
+-                    root.iconClicked();
+-                }
+-            }
+-
+-            onEntered: {
+-                const tooltipText = targetDevice ? "bl device: " + targetDevice.name : "Backlight Control";
+-                sharedTooltip.show(tooltipText, iconArea, 0, 0, "bottom");
+-            }
+-
+-            onExited: {
+-                sharedTooltip.hide();
+-            }
+-
+-            DankIcon {
+-                anchors.centerIn: parent
+-                name: DisplayService.brightnessAvailable && targetDevice ? DisplayService.brightnessIconName(targetDevice, targetBrightness) : "brightness_low"
+-                size: Theme.iconSize
+-                color: DisplayService.brightnessAvailable && targetDevice && targetBrightness > 0 ? Theme.primary : Theme.surfaceText
+-            }
+-        }
+-    }
+-
+-    DankSlider {
++    CcMacSlider {
+         id: brightnessSlider
+ 
+-        anchors.verticalCenter: parent.verticalCenter
+-        width: parent.width - (Theme.iconSize + Theme.spacingS * 2)
++        property real liveValue: -1
++
++        anchors.fill: parent
+         enabled: DisplayService.brightnessAvailable && targetDeviceName.length > 0
++        iconName: DisplayService.brightnessAvailable && targetDevice ? DisplayService.brightnessIconName(targetDevice, targetBrightness) : "brightness_low"
++        iconInteractive: !!DisplayService.devices && DisplayService.devices.length > 1
+         minimum: DisplayService.brightnessMinimum(targetDevice)
+         maximum: DisplayService.brightnessMaximum(targetDevice)
+-        showValue: true
+         unit: DisplayService.brightnessUnit(targetDevice)
+-        onSliderValueChanged: function (newValue) {
++        value: isDragging && liveValue >= 0 ? liveValue : root.targetBrightness
++        onIsDraggingChanged: if (!isDragging) liveValue = -1
++        onIconClicked: root.iconClicked()
++        onMoved: newValue => {
+             if (DisplayService.brightnessAvailable && targetDeviceName) {
++                liveValue = newValue;
+                 DisplayService.setBrightness(newValue, targetDeviceName, true);
+             }
+         }
+-        thumbOutlineColor: Theme.surfaceContainer
+-        trackColor: root.sliderTrackColor.a > 0 ? root.sliderTrackColor : Theme.ccSliderTrackColor
+-        trackOpacity: root.sliderTrackOpacity
+-
+-        Binding on value {
+-            value: root.targetBrightness
+-            when: !brightnessSlider.isDragging
+-        }
+     }
+ }
+--- a/Modules/ControlCenter/Widgets/InputAudioSliderRow.qml
++++ b/Modules/ControlCenter/Widgets/InputAudioSliderRow.qml
+@@ -3,7 +3,7 @@
+ import qs.Services
+ import qs.Widgets
+ 
+-Row {
++Item {
+     id: root
+ 
+     LayoutMirroring.enabled: I18n.isRtl
+@@ -13,77 +13,37 @@
+     property color sliderTrackColor: "transparent"
+     property real sliderTrackOpacity: Theme.ccSliderTrackOpacity
+ 
+-    height: 40
+-    spacing: 0
++    height: 26
+ 
+-    Rectangle {
+-        width: Theme.iconSize + Theme.spacingS * 2
+-        height: Theme.iconSize + Theme.spacingS * 2
+-        anchors.verticalCenter: parent.verticalCenter
+-        radius: (Theme.iconSize + Theme.spacingS * 2) / 2
+-        color: iconArea.containsMouse ? Theme.primaryHover : Theme.withAlpha(Theme.primary, 0)
+-
+-        DankRipple {
+-            id: iconRipple
+-            cornerRadius: parent.radius
+-        }
++    CcMacSlider {
++        id: micSlider
+ 
+-        MouseArea {
+-            id: iconArea
+-            anchors.fill: parent
+-            visible: defaultSource !== null
+-            hoverEnabled: true
+-            cursorShape: Qt.PointingHandCursor
+-            onPressed: mouse => iconRipple.trigger(mouse.x, mouse.y)
+-            onClicked: {
+-                if (defaultSource?.audio) {
+-                    SessionData.suppressOSDTemporarily();
+-                    defaultSource.audio.muted = !defaultSource.audio.muted;
+-                }
+-            }
+-        }
++        property int liveValue: -1
++        readonly property bool isMuted: !defaultSource?.audio || defaultSource.audio.muted || defaultSource.audio.volume === 0.0
+ 
+-        DankIcon {
+-            anchors.centerIn: parent
+-            name: {
+-                if (!defaultSource?.audio)
+-                    return "mic_off";
+-
+-                let volume = defaultSource.audio.volume;
+-                let muted = defaultSource.audio.muted;
+-
+-                if (muted || volume === 0.0)
+-                    return "mic_off";
+-                return "mic";
+-            }
+-            size: Theme.iconSize
+-            color: defaultSource?.audio && !defaultSource.audio.muted && defaultSource.audio.volume > 0 ? Theme.primary : Theme.surfaceText
+-        }
+-    }
+-
+-    DankSlider {
+-        readonly property real actualVolumePercent: defaultSource?.audio ? Math.round(defaultSource.audio.volume * 100) : 0
+-
+-        anchors.verticalCenter: parent.verticalCenter
+-        width: parent.width - (Theme.iconSize + Theme.spacingS * 2)
++        anchors.fill: parent
+         enabled: defaultSource?.audio != null
++        iconName: isMuted ? "mic_off" : "mic"
++        iconInteractive: defaultSource?.audio != null
++        muted: !!defaultSource?.audio?.muted
+         minimum: 0
+         maximum: 100
+-        value: defaultSource?.audio ? Math.min(100, Math.round(defaultSource.audio.volume * 100)) : 0
+-        showValue: true
+-        unit: "%"
+-        valueOverride: actualVolumePercent
+-        thumbOutlineColor: Theme.surfaceContainer
+-        trackColor: root.sliderTrackColor.a > 0 ? root.sliderTrackColor : Theme.ccSliderTrackColor
+-        trackOpacity: root.sliderTrackOpacity
+-        onSliderValueChanged: function (newValue) {
++        value: isDragging && liveValue >= 0 ? liveValue : (defaultSource?.audio ? Math.min(100, Math.round(defaultSource.audio.volume * 100)) : 0)
++        onIsDraggingChanged: if (!isDragging) liveValue = -1
++        onIconClicked: {
+             if (defaultSource?.audio) {
+                 SessionData.suppressOSDTemporarily();
+-                defaultSource.audio.volume = newValue / 100.0;
+-                if (newValue > 0 && defaultSource.audio.muted) {
+-                    defaultSource.audio.muted = false;
+-                }
++                defaultSource.audio.muted = !defaultSource.audio.muted;
+             }
+         }
++        onMoved: newValue => {
++            if (!defaultSource?.audio)
++                return;
++            liveValue = newValue;
++            SessionData.suppressOSDTemporarily();
++            defaultSource.audio.volume = newValue / 100.0;
++            if (newValue > 0 && defaultSource.audio.muted)
++                defaultSource.audio.muted = false;
++        }
+     }
+ }
+--- a/Modules/ControlCenter/Widgets/CompoundPill.qml
++++ b/Modules/ControlCenter/Widgets/CompoundPill.qml
+@@ -23,7 +23,7 @@
+ 
+     width: parent ? parent.width : 220
+     height: 60
+-    radius: Theme.cornerRadius
++    radius: Theme.cornerRadius === 0 ? 0 : Theme.cornerRadius + 6
+ 
+     readonly property color _containerBg: Theme.ccPillInactiveBg
+ 
+@@ -31,24 +31,24 @@
+         const baseColor = bodyMouse.containsMouse ? Theme.ccPillInactiveHoverBg : _containerBg;
+         return baseColor;
+     }
+-    border.color: Theme.outlineMedium
+-    border.width: Theme.layerOutlineWidth
++    border.color: SessionData.isLightMode ? Qt.rgba(0, 0, 0, 0.06) : Qt.rgba(1, 1, 1, 0.06)
++    border.width: 1
+     antialiasing: true
+ 
+     readonly property color _labelPrimary: Theme.surfaceText
+-    readonly property color _labelSecondary: Theme.surfaceVariantText
++    readonly property color _labelSecondary: Theme.withAlpha(Theme.surfaceText, 0.6)
+     readonly property color _tileBgActive: Theme.ccTileActiveBg
+     readonly property color _tileBgInactive: {
+-        return Theme.ccTileInactiveBg;
++        return Theme.withAlpha(Theme.surfaceText, 0.10);
+     }
+     readonly property color _tileRingActive: Theme.ccTileRing
+     readonly property color _tileRingInactive: Theme.outlineHeavy
+     readonly property color _tileIconActive: Theme.ccTileActiveText
+-    readonly property color _tileIconInactive: Theme.ccTileInactiveIcon
++    readonly property color _tileIconInactive: Theme.surfaceText
+ 
+-    property int _padH: Theme.spacingS
+-    property int _tileSize: 48
+-    property int _tileRadius: Theme.cornerRadius
++    property int _padH: Theme.spacingM
++    property int _tileSize: 36
++    property int _tileRadius: _tileSize / 2
+ 
+     Rectangle {
+         id: rightHoverOverlay
+@@ -76,7 +76,7 @@
+         anchors.fill: parent
+         anchors.leftMargin: _padH
+         anchors.rightMargin: Theme.spacingM
+-        spacing: Theme.spacingM
++        spacing: Theme.spacingS + 2
+ 
+         Rectangle {
+             id: iconTile
+@@ -86,8 +86,13 @@
+             anchors.verticalCenter: parent.verticalCenter
+             radius: _tileRadius
+             color: isActive ? _tileBgActive : _tileBgInactive
+-            border.color: isActive ? _tileRingActive : Theme.outlineMedium
+-            border.width: isActive ? 1 : Theme.layerOutlineWidth
++            border.width: 0
++
++            Behavior on color {
++                ColorAnimation {
++                    duration: Theme.shortDuration
++                }
++            }
+             antialiasing: true
+ 
+             Rectangle {
+@@ -108,7 +113,8 @@
+                 id: pillIcon
+                 anchors.centerIn: parent
+                 name: iconName
+-                size: Theme.iconSize
++                size: 19
++                filled: isActive
+                 color: isActive ? _tileIconActive : _tileIconInactive
+ 
+                 DankBlink {
+@@ -141,14 +147,14 @@
+                 anchors.left: parent.left
+                 anchors.right: parent.right
+                 anchors.verticalCenter: parent.verticalCenter
+-                spacing: Theme.spacingXXS
++                spacing: 1
+ 
+                 StyledText {
+                     width: parent.width
+                     text: root.primaryText
+                     color: _labelPrimary
+-                    font.pixelSize: Theme.fontSizeMedium
+-                    font.weight: Font.Medium
++                    font.pixelSize: 13
++                    font.weight: Font.DemiBold
+                     elide: Text.ElideRight
+                     wrapMode: Text.NoWrap
+                     horizontalAlignment: Text.AlignLeft
+@@ -157,7 +163,7 @@
+                     width: parent.width
+                     text: root.secondaryText
+                     color: _labelSecondary
+-                    font.pixelSize: Theme.fontSizeSmall
++                    font.pixelSize: 11
+                     visible: text.length > 0
+                     elide: Text.ElideRight
+                     wrapMode: Text.NoWrap
+--- a/Modules/ControlCenter/Widgets/ToggleButton.qml
++++ b/Modules/ControlCenter/Widgets/ToggleButton.qml
+@@ -19,31 +19,22 @@
+ 
+     width: parent ? parent.width : 200
+     height: 60
+-    radius: {
+-        if (Theme.cornerRadius === 0)
+-            return 0;
+-        return isActive ? Theme.cornerRadius : Theme.cornerRadius + 4;
+-    }
++    radius: Theme.cornerRadius === 0 ? 0 : Theme.cornerRadius + 6
+ 
+     readonly property color _tileBgActive: Theme.ccTileActiveBg
+     readonly property color _tileBgInactive: Theme.ccPillInactiveBg
+     readonly property color _tileRingActive: Theme.ccTileRing
+ 
+-    color: {
+-        if (isActive)
+-            return _tileBgActive;
+-        const baseColor = mouseArea.containsMouse ? Theme.ccPillInactiveHoverBg : _tileBgInactive;
+-        return baseColor;
+-    }
+-    border.color: isActive ? _tileRingActive : Theme.outlineMedium
+-    border.width: isActive ? 1 : Theme.layerOutlineWidth
++    color: mouseArea.containsMouse ? Theme.ccPillInactiveHoverBg : _tileBgInactive
++    border.color: SessionData.isLightMode ? Qt.rgba(0, 0, 0, 0.06) : Qt.rgba(1, 1, 1, 0.06)
++    border.width: 1
+     opacity: enabled ? 1.0 : 0.6
+ 
+     readonly property color _containerBg: Theme.ccPillInactiveBg
+ 
+     Rectangle {
+         anchors.fill: parent
+-        radius: Theme.cornerRadius
++        radius: root.radius
+         color: mouseArea.containsMouse ? Theme.hoverTint(_containerBg) : Theme.withAlpha(_containerBg, 0)
+         opacity: mouseArea.containsMouse ? 0.08 : 0.0
+ 
+@@ -56,35 +47,51 @@
+ 
+     Row {
+         anchors.fill: parent
+-        anchors.leftMargin: Theme.spacingL + 2
++        anchors.leftMargin: Theme.spacingM
+         anchors.rightMargin: Theme.spacingM
+-        spacing: Theme.spacingM
++        spacing: Theme.spacingS + 2
+ 
+-        DankIcon {
+-            name: root.iconName
+-            size: Theme.iconSize
+-            color: isActive ? Theme.ccTileActiveText : Theme.ccTileInactiveIcon
++        Rectangle {
++            id: iconCircle
++            width: 36
++            height: 36
++            radius: 18
+             anchors.verticalCenter: parent.verticalCenter
+-            rotation: root.iconRotation
+-            onRotationCompleted: root.iconRotationCompleted()
++            color: isActive ? _tileBgActive : Theme.withAlpha(Theme.surfaceText, 0.10)
++
++            Behavior on color {
++                ColorAnimation {
++                    duration: Theme.shortDuration
++                }
++            }
++
++            DankIcon {
++                anchors.centerIn: parent
++                name: root.iconName
++                size: 19
++                filled: isActive
++                color: isActive ? Theme.ccTileActiveText : Theme.surfaceText
++                rotation: root.iconRotation
++                onRotationCompleted: root.iconRotationCompleted()
++            }
+         }
+ 
+         Item {
+-            width: parent.width - Theme.iconSize - parent.spacing
++            width: parent.width - iconCircle.width - parent.spacing
+             height: parent.height
+ 
+             Column {
+                 anchors.left: parent.left
+                 anchors.right: parent.right
+                 anchors.verticalCenter: parent.verticalCenter
+-                spacing: Theme.spacingXXS
++                spacing: 1
+ 
+                 StyledText {
+                     width: parent.width
+                     text: root.text
+-                    font.pixelSize: Theme.fontSizeMedium
+-                    color: isActive ? Theme.ccTileActiveText : Theme.surfaceText
+-                    font.weight: Font.Medium
++                    font.pixelSize: 13
++                    color: Theme.surfaceText
++                    font.weight: Font.DemiBold
+                     elide: Text.ElideRight
+                     wrapMode: Text.NoWrap
+                     horizontalAlignment: Text.AlignLeft
+@@ -93,8 +100,8 @@
+                 StyledText {
+                     width: parent.width
+                     text: root.secondaryText
+-                    font.pixelSize: Theme.fontSizeSmall
+-                    color: isActive ? Theme.ccTileActiveText : Theme.surfaceVariantText
++                    font.pixelSize: 11
++                    color: Theme.withAlpha(Theme.surfaceText, 0.6)
+                     visible: text.length > 0
+                     elide: Text.ElideRight
+                     wrapMode: Text.NoWrap
+@@ -119,10 +126,4 @@
+         onClicked: root.clicked()
+     }
+ 
+-    Behavior on radius {
+-        NumberAnimation {
+-            duration: Theme.shortDuration
+-            easing.type: Theme.standardEasing
+-        }
+-    }
+ }
+--- a/Modules/ControlCenter/Components/HeaderPane.qml
++++ b/Modules/ControlCenter/Components/HeaderPane.qml
+@@ -22,11 +22,11 @@
+     Component.onCompleted: DgopService.addRef("system")
+     Component.onDestruction: DgopService.removeRef("system")
+ 
+-    implicitHeight: 70
+-    radius: Theme.cornerRadius
++    implicitHeight: 62
++    radius: Theme.cornerRadius === 0 ? 0 : Theme.cornerRadius + 6
+     color: Theme.nestedSurface
+-    border.color: Theme.outlineMedium
+-    border.width: Theme.layerOutlineWidth
++    border.color: SessionData.isLightMode ? Qt.rgba(0, 0, 0, 0.06) : Qt.rgba(1, 1, 1, 0.06)
++    border.width: 1
+ 
+     MouseArea {
+         anchors.fill: parent
+@@ -38,15 +38,15 @@
+     Row {
+         anchors.left: parent.left
+         anchors.verticalCenter: parent.verticalCenter
+-        anchors.leftMargin: Theme.spacingL
++        anchors.leftMargin: Theme.spacingM
+         anchors.rightMargin: Theme.spacingL
+-        spacing: Theme.spacingM
++        spacing: Theme.spacingS + 2
+ 
+         DankCircularImage {
+             id: avatarContainer
+ 
+-            width: 60
+-            height: 60
++            width: 40
++            height: 40
+             imageSource: {
+                 if (PortalService.profileImage === "")
+                     return "";
+@@ -61,18 +61,20 @@
+ 
+         Column {
+             anchors.verticalCenter: parent.verticalCenter
+-            spacing: Theme.spacingXXS
++            spacing: 1
+ 
+-            Typography {
++            StyledText {
+                 text: UserInfoService.fullName || UserInfoService.username || I18n.tr("User")
+-                style: Typography.Style.Subtitle
+                 color: Theme.surfaceText
++                font.pixelSize: 14
++                font.weight: Font.DemiBold
+             }
+ 
+-            Typography {
+-                text: DgopService.uptime ? I18n.tr("up", "uptime prefix, e.g. 'up 4h 2m'") + " " + DgopService.uptime.slice(3) : I18n.tr("Unknown")
+-                style: Typography.Style.Caption
+-                color: Theme.surfaceVariantText
++            StyledText {
++                // DgopService.uptime is English ("up 7 hours, 15 minutes"); compact it to "7 h 15 min".
++                text: DgopService.uptime ? I18n.tr("Active") + " · " + DgopService.uptime.slice(3).replace(/ days?/g, " d").replace(/ hours?/g, " h").replace(/ minutes?/g, " min").replace(/ seconds?/g, " s").replace(/,/g, "") : I18n.tr("Unknown")
++                color: Theme.withAlpha(Theme.surfaceText, 0.6)
++                font.pixelSize: 11
+             }
+         }
+     }
+@@ -85,9 +87,9 @@
+         spacing: Theme.spacingXS
+ 
+         DankActionButton {
+-            buttonSize: 36
++            buttonSize: 32
+             iconName: "lock"
+-            iconSize: Theme.iconSize - 4
++            iconSize: Theme.iconSize - 6
+             iconColor: Theme.surfaceText
+             backgroundColor: "transparent"
+             onClicked: {
+@@ -96,18 +98,18 @@
+         }
+ 
+         DankActionButton {
+-            buttonSize: 36
++            buttonSize: 32
+             iconName: "power_settings_new"
+-            iconSize: Theme.iconSize - 4
++            iconSize: Theme.iconSize - 6
+             iconColor: Theme.surfaceText
+             backgroundColor: "transparent"
+             onClicked: root.powerButtonClicked()
+         }
+ 
+         DankActionButton {
+-            buttonSize: 36
++            buttonSize: 32
+             iconName: "settings"
+-            iconSize: Theme.iconSize - 4
++            iconSize: Theme.iconSize - 6
+             iconColor: Theme.surfaceText
+             backgroundColor: "transparent"
+             onClicked: {
+@@ -117,9 +119,9 @@
+         }
+ 
+         DankActionButton {
+-            buttonSize: 36
++            buttonSize: 32
+             iconName: editMode ? "done" : "edit"
+-            iconSize: Theme.iconSize - 4
++            iconSize: Theme.iconSize - 6
+             iconColor: editMode ? Theme.primary : Theme.surfaceText
+             backgroundColor: "transparent"
+             onClicked: root.editModeToggled()
+--- a/Modules/ControlCenter/Components/DragDropGrid.qml
++++ b/Modules/ControlCenter/Components/DragDropGrid.qml
+@@ -623,12 +623,12 @@
+             property var widgetData: parent.widgetData || {}
+             property int widgetIndex: parent.widgetIndex || 0
+             width: parent.width
+-            height: 16
++            height: 26
+ 
+             AudioSliderRow {
+                 anchors.centerIn: parent
+                 width: parent.width
+-                height: 14
++                height: 26
+                 sliderTrackColor: Theme.ccSliderTrackColor
+                 sliderTrackOpacity: Theme.ccSliderTrackOpacity
+             }
+@@ -641,13 +641,13 @@
+             property var widgetData: parent.widgetData || {}
+             property int widgetIndex: parent.widgetIndex || 0
+             width: parent.width
+-            height: 16
++            height: 26
+ 
+             BrightnessSliderRow {
+                 id: brightnessSliderRow
+                 anchors.centerIn: parent
+                 width: parent.width
+-                height: 14
++                height: 26
+                 deviceName: widgetData.deviceName || ""
+                 instanceId: widgetData.instanceId || ""
+                 screenName: root.screenName
+@@ -670,12 +670,12 @@
+             property var widgetData: parent.widgetData || {}
+             property int widgetIndex: parent.widgetIndex || 0
+             width: parent.width
+-            height: 16
++            height: 26
+ 
+             InputAudioSliderRow {
+                 anchors.centerIn: parent
+                 width: parent.width
+-                height: 14
++                height: 26
+                 sliderTrackColor: Theme.ccSliderTrackColor
+                 sliderTrackOpacity: Theme.ccSliderTrackOpacity
+             }
+--- /dev/null
++++ b/Modules/ControlCenter/Widgets/CcMacSlider.qml
+@@ -0,0 +1,163 @@
++pragma ComponentBehavior: Bound
++
++import QtQuick
++import qs.Common
++import qs.Widgets
++
++// macOS Control Center style slider: thick capsule, white fill that carries
++// the icon, value shown at the track's end only while hovering or dragging.
++Rectangle {
++    id: root
++
++    property string iconName: "volume_up"
++    property color iconColor: root.onFillColor
++    property bool iconInteractive: false
++    property real value: 0
++    property real minimum: 0
++    property real maximum: 100
++    property string unit: "%"
++    property bool muted: false
++    property int wheelStep: 5
++
++    readonly property bool isLight: SessionData.isLightMode
++    readonly property color onFillColor: Qt.rgba(0.11, 0.11, 0.12, 0.72)
++    readonly property color fillColor: isLight ? "#ffffff" : Qt.rgba(1, 1, 1, 0.94)
++    readonly property bool isDragging: trackArea.pressed
++    readonly property bool hovered: trackArea.containsMouse || iconArea.containsMouse
++    readonly property real ratio: {
++        const span = Math.max(1, root.maximum - root.minimum);
++        return Math.max(0, Math.min(1, (root.value - root.minimum) / span));
++    }
++
++    signal moved(int newValue)
++    signal iconClicked
++
++    function valueAt(x) {
++        const travel = Math.max(1, root.width - root.height);
++        const r = Math.max(0, Math.min(1, (x - root.height / 2) / travel));
++        return Math.round(root.minimum + r * (root.maximum - root.minimum));
++    }
++
++    function emitValue(v) {
++        const clamped = Math.max(root.minimum, Math.min(root.maximum, v));
++        if (clamped !== Math.round(root.value))
++            root.moved(clamped);
++    }
++
++    height: 26
++    radius: height / 2
++    color: isLight ? Qt.rgba(0, 0, 0, 0.08) : Qt.rgba(1, 1, 1, 0.12)
++    border.width: 1
++    border.color: isLight ? Qt.rgba(0, 0, 0, 0.05) : Qt.rgba(1, 1, 1, 0.05)
++    opacity: enabled ? 1 : 0.5
++
++    Rectangle {
++        id: fill
++
++        anchors {
++            left: parent.left
++            top: parent.top
++            bottom: parent.bottom
++        }
++        width: root.height + (root.width - root.height) * root.ratio
++        radius: height / 2
++        color: root.fillColor
++        opacity: root.muted ? 0.45 : 1
++
++        Behavior on width {
++            enabled: !root.isDragging
++            NumberAnimation {
++                duration: 140
++                easing.type: Easing.OutCubic
++            }
++        }
++
++        Behavior on opacity {
++            NumberAnimation {
++                duration: 160
++            }
++        }
++    }
++
++    StyledText {
++        id: valueLabel
++
++        readonly property bool overFill: fill.width > root.width - width - root.height / 2 - 6
++
++        anchors {
++            right: parent.right
++            rightMargin: root.height / 2 - 1
++            verticalCenter: parent.verticalCenter
++        }
++        text: Math.round(root.value) + root.unit
++        color: overFill ? root.onFillColor : Theme.withAlpha(Theme.surfaceText, 0.6)
++        font.pixelSize: 11
++        font.weight: Font.DemiBold
++        font.features: {
++            "tnum": 1
++        }
++        opacity: root.hovered || root.isDragging ? 1 : 0
++
++        Behavior on opacity {
++            NumberAnimation {
++                duration: 150
++            }
++        }
++    }
++
++    MouseArea {
++        id: trackArea
++
++        anchors.fill: parent
++        enabled: root.enabled
++        hoverEnabled: true
++        preventStealing: true
++        cursorShape: Qt.PointingHandCursor
++        onPressed: mouse => root.emitValue(root.valueAt(mouse.x))
++        onPositionChanged: mouse => {
++            if (pressed)
++                root.emitValue(root.valueAt(mouse.x));
++        }
++        onWheel: wheel => {
++            const delta = wheel.angleDelta.y !== 0 ? wheel.angleDelta.y : -wheel.angleDelta.x;
++            if (delta === 0)
++                return;
++            root.emitValue(Math.round(root.value) + (delta > 0 ? root.wheelStep : -root.wheelStep));
++        }
++    }
++
++    Item {
++        anchors {
++            left: parent.left
++            top: parent.top
++            bottom: parent.bottom
++        }
++        width: root.height
++
++        DankIcon {
++            anchors.centerIn: parent
++            name: root.iconName
++            size: 15
++            filled: true
++            color: root.iconColor
++            scale: iconArea.containsMouse && root.iconInteractive ? 1.12 : 1
++
++            Behavior on scale {
++                NumberAnimation {
++                    duration: 120
++                    easing.type: Easing.OutCubic
++                }
++            }
++        }
++
++        MouseArea {
++            id: iconArea
++
++            anchors.fill: parent
++            enabled: root.iconInteractive
++            hoverEnabled: true
++            cursorShape: Qt.PointingHandCursor
++            onClicked: root.iconClicked()
++        }
++    }
++}

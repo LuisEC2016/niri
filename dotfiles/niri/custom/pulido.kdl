@@ -1,0 +1,36 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Pulido estético, segunda pasada (2026-09-22). Se incluye después de
+// appearance.kdl, blur.kdl y chrome.kdl: niri fusiona campo por campo y gana
+// el último include.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// La animación de apertura (shader 92 % → 100 %) se movió a
+// custom/animaciones.kdl el 2026-09-23, junto con el resto de animaciones.
+
+layout {
+    // Columnas en pestañas (Mod+W): indicador redondeado dentro de la columna,
+    // fino y oculto con una sola pestaña. Por defecto es una barra recta de
+    // 4 px pegada por fuera.
+    tab-indicator {
+        on
+        hide-when-single-tab
+        place-within-column
+        position "top"
+        gap 6
+        width 3
+        length total-proportion=0.4
+        gaps-between-tabs 4
+        corner-radius 3
+    }
+}
+
+// Como macOS: el puntero desaparece al teclear y vuelve al mover el ratón.
+cursor {
+    hide-when-typing
+}
+
+// El pop-up "Important Hotkeys" en cada inicio de sesión. Sigue a mano con
+// Mod+Shift+/.
+hotkey-overlay {
+    skip-at-startup
+}

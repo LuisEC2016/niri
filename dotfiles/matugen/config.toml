@@ -1,0 +1,7 @@
+# Plantillas propias. DMS copia la sección de plantillas de este archivo en la
+# config de matugen que arma en cada cambio de tema (runUserMatugenTemplates).
+# Ojo: DMS busca el TEXTO de la cabecera de sección en todo el archivo, también
+# dentro de comentarios; escribirla en un comentario rompe matugen entero.
+# Las tablas con nombre sueltas no las ve: por eso las entradas van en línea.
+[templates]
+niri_futurista = { input_path = '/home/luis/.config/matugen/templates/niri-futurista.kdl', output_path = '/home/luis/.config/niri/custom/futurista.kdl' }

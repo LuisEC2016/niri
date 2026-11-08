@@ -1,0 +1,41 @@
+--- a/Common/SettingsData.qml
++++ b/Common/SettingsData.qml
+@@ -2294,6 +2294,8 @@
+         let bottomBar = 0;
+         let leftBar = 0;
+         let rightBar = 0;
++        // Bottom edge of the top bars without popupGap, for surfaces that attach to the bar.
++        let topBarEdge = 0;
+ 
+         for (var i = 0; i < enabledBars.length; i++) {
+             const other = enabledBars[i];
+@@ -2314,6 +2316,7 @@
+             switch (other.position) {
+             case SettingsData.Position.Top:
+                 topBar = Math.max(topBar, otherThickness + popupGap);
++                topBarEdge = Math.max(topBarEdge, otherThickness);
+                 break;
+             case SettingsData.Position.Bottom:
+                 bottomBar = Math.max(bottomBar, otherThickness + popupGap);
+@@ -2339,6 +2342,7 @@
+ 
+         return {
+             "topBar": topBar,
++            "topBarEdge": topBarEdge,
+             "bottomBar": bottomBar,
+             "leftBar": leftBar,
+             "rightBar": rightBar
+--- a/Modules/Notifications/Popup/NotificationPopup.qml
++++ b/Modules/Notifications/Popup/NotificationPopup.qml
+@@ -417,7 +417,10 @@
+         if (frameVisibleWithoutConnectedChrome)
+             return _frameGapMargin("top") + screenY;
+         const barInfo = getBarInfo();
+-        const base = barInfo.topBar > 0 ? barInfo.topBar : Theme.popupDistance;
++        // Rest the card on the bar's bottom edge. topBar adds popupGap (auto: max(4, spacing))
++        // and the card is drawn cardInset inside content, which left 8 px of desktop between
++        // the bar and the notification. Without a top bar, keep upstream's clearance.
++        const base = barInfo.topBarEdge > 0 ? barInfo.topBarEdge - content.cardInset : barInfo.topBar > 0 ? barInfo.topBar : Theme.popupDistance;
+         return base + screenY;
+     }
+ 

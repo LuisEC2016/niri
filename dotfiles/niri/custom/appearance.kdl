@@ -1,0 +1,68 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Apariencia propia — estilo macOS.
+//
+// Este archivo se incluye DESPUÉS de los fragmentos de DMS. niri fusiona los
+// nodos de los distintos includes campo por campo, así que aquí sólo se
+// redefine lo que se quiere cambiar: los colores de acento que genera matugen
+// en dms/colors.kdl siguen vigentes y siguen cambiando con el tema.
+// ─────────────────────────────────────────────────────────────────────────────
+
+layout {
+    // Ventanas pegadas a la barra superior: el hueco de 10 px era la suma de
+    // bottomGap 6 de la DankBar (que solo agranda la zona exclusiva) y el
+    // gaps 4 de niri. Un strut negativo se los come sin tocar los ajustes de
+    // DMS ni el gap entre ventanas. Si cambia bottomGap, ajustar este valor.
+    struts {
+        top -4
+    }
+
+    // macOS separa las ventanas con sombra, no con un borde de acento
+    // permanente. El borde se apaga y el foco lo marca sólo el focus-ring.
+    border {
+        off
+    }
+
+    focus-ring {
+        on
+        width 2
+
+        // Sin color activo aquí a propósito: lo pone dms/colors.kdl con el
+        // primary de Material You, que matugen regenera con cada wallpaper. El
+        // degradado lila→azul que había estaba escrito a mano y dejaba de
+        // casar con el tema al cambiar de fondo (2026-09-22).
+
+        // La ventana inactiva no lleva acento: una línea casi invisible que la
+        // recorta contra el wallpaper difuminado y nada más.
+        inactive-color "#ffffff1a"
+    }
+
+    // Sombra macOS: muy difusa, sin spread, caída vertical. El spread grande es
+    // lo que hacía que la sombra pareciera un halo en lugar de una elevación.
+    shadow {
+        on
+        softness 40
+        spread 0
+        offset x=0 y=12
+        color "#00000082"
+        // La activa se despega con la sombra completa; las inactivas quedan
+        // más pegadas al fondo. Sin esto niri usa una versión algo más
+        // transparente de `color`, demasiado parecida para notar el foco.
+        inactive-color "#00000038"
+    }
+
+    // Hueco de inserción al arrastrar: sin override, usa el color del tema de
+    // dms/colors.kdl (primary al 50 %), igual que el focus-ring.
+}
+
+overview {
+    // Fondo neutro frío, un punto más claro que el negro puro: con el wallpaper
+    // difuminado detrás, el negro absoluto aplasta las miniaturas.
+    backdrop-color "#0e0d13"
+
+    workspace-shadow {
+        softness 48
+        spread 0
+        offset x=0 y=10
+        color "#00000075"
+    }
+}

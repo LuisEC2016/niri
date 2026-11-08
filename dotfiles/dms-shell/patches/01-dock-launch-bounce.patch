@@ -1,0 +1,225 @@
+--- a/Modules/Dock/DockAppButton.qml
++++ b/Modules/Dock/DockAppButton.qml
+@@ -265,6 +265,121 @@
+         }
+     }
+ 
++    property real launchAnimOffset: 0
++    property real launchAnimScale: 1
++
++    function playLaunchAnimation() {
++        launchAnimation.restart();
++    }
++
++    SequentialAnimation {
++        id: launchAnimation
++
++        running: false
++        alwaysRunToEnd: true
++
++        NumberAnimation {
++            target: root
++            property: "launchAnimScale"
++            to: 0.84
++            duration: 90
++            easing.type: Easing.OutQuad
++        }
++
++        ParallelAnimation {
++            NumberAnimation {
++                target: root
++                property: "launchAnimOffset"
++                to: animationDirection * animationDistance * 0.55
++                duration: 190
++                easing.type: Easing.OutQuad
++            }
++            NumberAnimation {
++                target: root
++                property: "launchAnimScale"
++                to: 1.08
++                duration: 190
++                easing.type: Easing.OutQuad
++            }
++        }
++
++        ParallelAnimation {
++            NumberAnimation {
++                target: root
++                property: "launchAnimOffset"
++                to: 0
++                duration: 210
++                easing.type: Easing.InQuad
++            }
++            NumberAnimation {
++                target: root
++                property: "launchAnimScale"
++                to: 0.94
++                duration: 210
++                easing.type: Easing.InQuad
++            }
++        }
++
++        ParallelAnimation {
++            NumberAnimation {
++                target: root
++                property: "launchAnimOffset"
++                to: animationDirection * animationDistance * 0.26
++                duration: 150
++                easing.type: Easing.OutQuad
++            }
++            NumberAnimation {
++                target: root
++                property: "launchAnimScale"
++                to: 1.03
++                duration: 150
++                easing.type: Easing.OutQuad
++            }
++        }
++
++        ParallelAnimation {
++            NumberAnimation {
++                target: root
++                property: "launchAnimOffset"
++                to: 0
++                duration: 160
++                easing.type: Easing.InQuad
++            }
++            NumberAnimation {
++                target: root
++                property: "launchAnimScale"
++                to: 0.97
++                duration: 160
++                easing.type: Easing.InQuad
++            }
++        }
++
++        NumberAnimation {
++            target: root
++            property: "launchAnimOffset"
++            to: animationDirection * animationDistance * 0.1
++            duration: 110
++            easing.type: Easing.OutQuad
++        }
++
++        ParallelAnimation {
++            NumberAnimation {
++                target: root
++                property: "launchAnimOffset"
++                to: 0
++                duration: 120
++                easing.type: Easing.OutBounce
++            }
++            NumberAnimation {
++                target: root
++                property: "launchAnimScale"
++                to: 1
++                duration: 120
++                easing.type: Easing.OutQuad
++            }
++        }
++    }
++
+     NumberAnimation {
+         id: exitAnimation
+ 
+@@ -339,6 +454,7 @@
+                 if (!appData.appId)
+                     return;
+                 if (appData.isCoreApp && appData.coreAppData) {
++                    playLaunchAnimation();
+                     AppSearchService.executeCoreApp(appData.coreAppData);
+                     return;
+                 }
+@@ -352,6 +468,7 @@
+                         "comment": pinnedEntry.comment || ""
+                     });
+                 }
++                playLaunchAnimation();
+                 SessionService.launchDesktopEntry(pinnedEntry);
+                 break;
+             case "window":
+@@ -367,6 +484,7 @@
+                     if (!appData.appId)
+                         return;
+                     if (appData.isCoreApp && appData.coreAppData) {
++                        playLaunchAnimation();
+                         AppSearchService.executeCoreApp(appData.coreAppData);
+                         return;
+                     }
+@@ -380,6 +498,7 @@
+                             "comment": groupedEntry.comment || ""
+                         });
+                     }
++                    playLaunchAnimation();
+                     SessionService.launchDesktopEntry(groupedEntry);
+                 } else if (appData.windowCount === 1) {
+                     const groupedToplevel = getToplevelObject();
+@@ -454,6 +573,7 @@
+                             "comment": desktopEntry.comment || ""
+                         });
+                     }
++                    playLaunchAnimation();
+                     SessionService.launchDesktopEntry(desktopEntry);
+                     break;
+                 }
+@@ -472,23 +592,44 @@
+         id: visualContent
+         anchors.fill: parent
+ 
+-        transform: Translate {
+-            id: iconTransform
+-            x: {
+-                if (dragging && !isVertical)
+-                    return dragAxisOffset;
+-                if (!dragging && isVertical)
+-                    return hoverAnimOffset;
+-                return 0;
+-            }
+-            y: {
+-                if (dragging && isVertical)
+-                    return dragAxisOffset;
+-                if (!dragging && !isVertical)
+-                    return hoverAnimOffset;
+-                return 0;
++        transform: [
++            Translate {
++                id: iconTransform
++                x: {
++                    if (dragging && !isVertical)
++                        return dragAxisOffset;
++                    if (!dragging && isVertical)
++                        return hoverAnimOffset + root.launchAnimOffset;
++                    return 0;
++                }
++                y: {
++                    if (dragging && isVertical)
++                        return dragAxisOffset;
++                    if (!dragging && !isVertical)
++                        return hoverAnimOffset + root.launchAnimOffset;
++                    return 0;
++                }
++            },
++            Scale {
++                id: launchScaleTransform
++                origin.x: {
++                    if (SettingsData.dockPosition === SettingsData.Position.Left)
++                        return 0;
++                    if (SettingsData.dockPosition === SettingsData.Position.Right)
++                        return visualContent.width;
++                    return visualContent.width / 2;
++                }
++                origin.y: {
++                    if (SettingsData.dockPosition === SettingsData.Position.Top)
++                        return 0;
++                    if (SettingsData.dockPosition === SettingsData.Position.Bottom)
++                        return visualContent.height;
++                    return visualContent.height / 2;
++                }
++                xScale: root.launchAnimScale
++                yScale: root.launchAnimScale
+             }
+-        }
++        ]
+ 
+         Rectangle {
+             anchors.fill: parent

@@ -1,0 +1,16 @@
+--- a/Services/NotificationService.qml
++++ b/Services/NotificationService.qml
+@@ -961,10 +961,11 @@
+             const hours = Math.floor(minutes / 60);
+ 
+             if (hours < 1) {
++                // Parche local 09: mismas claves traducidas que HistoryNotificationCard.
+                 if (minutes < 1) {
+-                    return "now";
++                    return I18n.tr("now");
+                 }
+-                return `${minutes}m ago`;
++                return I18n.tr("%1m ago").arg(minutes);
+             }
+ 
+             const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());

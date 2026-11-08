@@ -1,0 +1,28 @@
+--- a/Services/NotificationService.qml
++++ b/Services/NotificationService.qml
+@@ -608,6 +608,25 @@
+         }
+     }
+ 
++    // Parche local 04: Slack en Linux nunca manda CloseNotification al leer
++    // el mensaje, así que sus notificaciones se quedaban en "Actuales" para
++    // siempre. Se descartan solas a los 20 min; el historial las conserva.
++    // Las críticas se quedan hasta que el usuario las cierre.
++    readonly property int centerAutoDismissMs: 20 * 60 * 1000
++
++    Timer {
++        id: centerAutoDismissTimer
++        interval: 60000
++        repeat: true
++        running: root.notifications.length > 0
++        onTriggered: {
++            const cutoff = Date.now() - root.centerAutoDismissMs;
++            const stale = root.notifications.filter(w => w && w.urgency !== NotificationUrgency.Critical && w.time.getTime() < cutoff);
++            for (const w of stale)
++                root.dismissNotification(w);
++        }
++    }
++
+     Timer {
+         id: dismissPump
+         interval: _dismissTickMs

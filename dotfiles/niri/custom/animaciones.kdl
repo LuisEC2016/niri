@@ -1,0 +1,173 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Animaciones (2026-09-23). Única fuente de verdad: ni config.kdl ni
+// pulido.kdl definen ya un bloque `animations`.
+//
+// Por qué un solo archivo: niri NO fusiona dentro de cada animación
+// (niri-config/src/animations.rs, MergeWith<AnimationsPart>: `merge_clone!`
+// por animación). Un `window-open { custom-shader ... }` en un include
+// posterior reemplaza el nodo entero, y lo que no traiga vuelve al valor de
+// fábrica, no al del include anterior. Así el `window-open` de config.kdl
+// llevaba muerto desde que pulido.kdl añadió el shader.
+//
+// Medido el 2026-09-23 con un cliente wp_presentation, en DP-1 a 74.973 Hz
+// (13.34 ms por frame), Intel UHD Raptor Lake-P, perfil "performance":
+// 0 frames perdidos en scroll horizontal, overview y abrir/cerrar Ptyxis con
+// blur. La GPU sobra: lo que se ajusta aquí es la forma del movimiento.
+//
+// 2026-09-28 → 2026-10-09: custom/futurista.kdl sustituía el window-open y el
+// window-close de abajo por shaders de holograma. Se quitaron de su plantilla
+// (~/.config/matugen/templates/niri-futurista.kdl); el neón de bordes y halo
+// sigue allí. Si una plantilla vuelve a traer un bloque `animations`, gana
+// sobre este archivo porque se incluye después.
+// ─────────────────────────────────────────────────────────────────────────────
+
+animations {
+    // Todo lo que se desplaza usa el MISMO muelle. El wiki ("Synchronized
+    // Animations") pide igualar horizontal-view-movement, window-movement y
+    // window-resize: algunas acciones no sincronizan la cámara con la ventana
+    // y, con parámetros distintos, el hueco entre columnas se abre y se cierra
+    // a mitad del movimiento. Antes: movimiento 0.95/700 y resize 1.0/800.
+    //
+    // damping-ratio 1.0 = crítico, cero rebote. stiffness 900 (fábrica 800):
+    // 90 % del recorrido en 130 ms, 99 % en 221 ms, fin en 307 ms (antes
+    // 366 ms). Es un compromiso: el salto máximo por frame en un scroll de
+    // 1920 px a 75 Hz crece con la rigidez (700: 249 px, 800: 266, 900: 283,
+    // 1000: 298), y cuanto mayor es, más se lee el movimiento como saltos.
+    horizontal-view-movement {
+        spring damping-ratio=1.0 stiffness=900 epsilon=0.0001
+    }
+    window-movement {
+        spring damping-ratio=1.0 stiffness=900 epsilon=0.0001
+    }
+    // Resize sin deformar, como el redimensionado en vivo de macOS. El shader
+    // de fábrica (src/render_helpers/shaders/resize.frag) estira las dos
+    // instantáneas, la de antes y la de después, hasta la geometría actual y
+    // las funde: durante todo el muelle el texto sale ensanchado y doble. Aquí
+    // las dos van a escala 1 y ancladas arriba a la izquierda, recortadas por
+    // la geometría actual, que es como una app redibuja su contenido al
+    // cambiar de tamaño. Donde está la de antes, se funde a la de después en
+    // 33 ms (50 % a los 21 ms): con 56 ms, en la prueba del 2026-10-09 el
+    // título centrado y el párrafo reflujado salían dobles dos frames.
+    //
+    // Al encoger, la geometría actual es más ancha que la nueva y la franja
+    // sobrante solo la cubre la instantánea vieja: mostrarla dejaba el título
+    // antiguo cortado contra el borde durante todo el muelle. Esa franja
+    // prolonga el último píxel de la nueva (a 3 px del borde, para saltarse
+    // un posible filo de 1-2 px), que es el fondo de la ventana: lo que
+    // enseña macOS mientras una app aún no ha redibujado. En el otro eje se
+    // aleja 12 px de las esquinas redondeadas del cliente.
+    //
+    // El recorte por fuera de la geometría y el redondeo de esquinas los pone
+    // el epílogo de niri (resize_epilogue.frag) porque `clip-to-geometry` está
+    // activo para todas las ventanas; el `return vec4(0.0)` de fuera es para
+    // que no asome la textura si alguna regla lo desactiva.
+    window-resize {
+        spring damping-ratio=1.0 stiffness=900 epsilon=0.0001
+        custom-shader r"
+            vec4 resize_color(vec3 coords_curr_geo, vec3 size_curr_geo) {
+                vec3 g = coords_curr_geo;
+                if (g.x < 0.0 || g.x > 1.0 || g.y < 0.0 || g.y > 1.0)
+                    return vec4(0.0);
+
+                // El mismo píxel lógico dentro de la geometría de antes y de
+                // la de después: misma escala, mismo origen arriba a la izq.
+                vec3 gp = niri_curr_geo_to_prev_geo * g;
+                vec3 gn = niri_curr_geo_to_next_geo * g;
+                bool in_prev = gp.x <= 1.0 && gp.y <= 1.0;
+
+                // Fuera de la nueva: su borde prolongado.
+                vec2 size_next = size_curr_geo.xy / vec2(niri_curr_geo_to_next_geo[0][0],
+                                                         niri_curr_geo_to_next_geo[1][1]);
+                vec2 edge = 1.0 - 3.0 / size_next;
+                vec2 corner = 12.0 / size_next;
+                vec2 n = vec2(
+                    gn.x > 1.0 ? edge.x : clamp(gn.x, corner.x, 1.0 - corner.x),
+                    gn.y > 1.0 ? edge.y : clamp(gn.y, corner.y, 1.0 - corner.y));
+                if (gn.x <= 1.0 && gn.y <= 1.0)
+                    n = gn.xy;
+                vec4 next = texture2D(niri_tex_next, (niri_geo_to_tex_next * vec3(n, 1.0)).st);
+
+                if (!in_prev)
+                    return next;
+                vec4 prev = texture2D(niri_tex_prev, (niri_geo_to_tex_prev * gp).st);
+                return mix(prev, next, smoothstep(0.0, 0.25, niri_clamped_progress));
+            }
+        "
+    }
+    workspace-switch {
+        spring damping-ratio=1.0 stiffness=900 epsilon=0.0001
+    }
+    overview-open-close {
+        spring damping-ratio=1.0 stiffness=900 epsilon=0.0001
+    }
+
+    // Apertura tipo macOS: zoom desde el centro 93 % → 100 % con fundido, sin
+    // desplazamiento. La de fábrica escala del 50 % al 100 %
+    // (src/layout/opening_window.rs: `progress / 2 + 0.5`).
+    //
+    // La curva va "linear" a propósito: niri pasa un solo progreso al shader,
+    // y con ease-out-expo (la versión del 2026-09-23) la opacidad llegaba al
+    // 90 % a los 27 ms, dos frames a 75 Hz: un "pop", no un fundido. Con el
+    // tiempo lineal, cada propiedad lleva su propia curva:
+    // - opacidad: ease-out-quad en 110 ms (50 % a los 32 ms, 90 % a los 75);
+    // - escala: ease-out-cubic en los 200 ms (99 % a los 157 ms) y termina
+    //   EXACTA en 1, sin cola de remuestreo que deje el texto blando.
+    window-open {
+        duration-ms 200
+        curve "linear"
+        custom-shader r"
+            vec4 open_color(vec3 coords_geo, vec3 size_geo) {
+                float t = niri_clamped_progress;
+
+                float r = 1.0 - t;
+                float scale = mix(0.93, 1.0, 1.0 - r * r * r);
+                vec2 c = (coords_geo.xy - vec2(0.5)) / scale + vec2(0.5);
+                vec3 coords_tex = niri_geo_to_tex * vec3(c, 1.0);
+                vec4 color = texture2D(niri_tex, coords_tex.st);
+                // Mientras se dibuja por debajo del 100 %, los bordes del
+                // área leen fuera de la textura (que ya incluye la sombra):
+                // vacío, no el píxel del borde repetido.
+                if (coords_tex.x < 0.0 || coords_tex.x > 1.0
+                        || coords_tex.y < 0.0 || coords_tex.y > 1.0)
+                    color = vec4(0.0);
+
+                float a = 1.0 - min(t / 0.55, 1.0);
+                return color * (1.0 - a * a);
+            }
+        "
+    }
+
+    // Cierre: la de fábrica encoge al 80 % (closing_window.rs: `(1 - p) / 5
+    // + 0.8`) mientras las columnas vecinas ya se deslizan a tapar el hueco, y
+    // durante ~120 ms el fantasma se cruza con ellas. Aquí apenas encoge
+    // (100 % → 96 %) y se desvanece rápido: 50 % de opacidad a los 31 ms,
+    // 90 % a los 80 ms (antes 53 y 123 ms con ease-out-quad de 180 ms).
+    window-close {
+        duration-ms 150
+        curve "ease-out-cubic"
+        custom-shader r"
+            vec4 close_color(vec3 coords_geo, vec3 size_geo) {
+                float p = niri_clamped_progress;
+                float scale = 1.0 - 0.04 * p;
+                vec2 c = (coords_geo.xy - vec2(0.5)) / scale + vec2(0.5);
+                vec3 coords_tex = niri_geo_to_tex * vec3(c, 1.0);
+                vec4 color = texture2D(niri_tex, coords_tex.st);
+                return color * (1.0 - p);
+            }
+        "
+    }
+
+    // Aviso "Config reloaded": el rebote leve de fábrica (0.6/1000) se deja,
+    // es efímero y sólo sale al editar la config.
+
+    screenshot-ui-open {
+        duration-ms 200
+        curve "ease-out-quad"
+    }
+
+    // De fábrica rebota (spring 0.6/500).
+    exit-confirmation-open-close {
+        duration-ms 200
+        curve "ease-out-quad"
+    }
+}

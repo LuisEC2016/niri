@@ -1,0 +1,85 @@
+--- a/Modules/Notifications/Center/HistoryNotificationList.qml
++++ b/Modules/Notifications/Center/HistoryNotificationList.qml
+@@ -13,6 +13,24 @@
+     property int selectedIndex: -1
+     property bool showKeyboardHints: false
+ 
++    // Parche local 08: búsqueda en el historial (idea de iNiR, docs/NOTIFICATIONS.md).
++    // Aparece con más de tres entradas; busca en app, título y cuerpo, sin
++    // distinguir mayúsculas ni acentos, y se combina con el filtro de tiempo.
++    property string searchQuery: ""
++    readonly property bool searchAvailable: NotificationService.historyList.length > 3
++    readonly property string _normalizedQuery: searchAvailable ? _fold(searchQuery.trim()) : ""
++
++    function _fold(str) {
++        return String(str || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
++    }
++
++    function matchesQuery(n) {
++        if (!_normalizedQuery)
++            return true;
++        const hay = _fold((n.appName || "") + "\n" + (n.summary || "") + "\n" + (n.body || "").replace(/<[^>]*>/g, ""));
++        return _normalizedQuery.split(/\s+/).every(term => hay.includes(term));
++    }
++
+     function getStartOfDay(date) {
+         const d = new Date(date);
+         d.setHours(0, 0, 0, 0);
+@@ -70,9 +88,9 @@
+ 
+     function countForFilter(key) {
+         const range = getFilterRange(key);
+-        if (!range.start && !range.end)
+-            return NotificationService.historyList.length;
+         return NotificationService.historyList.filter(n => {
++            if (!matchesQuery(n))
++                return false;
+             const ts = n.timestamp;
+             if (range.start && ts < range.start.getTime())
+                 return false;
+@@ -178,9 +196,11 @@
+ 
+     function getFilteredHistory() {
+         const range = getFilterRange(selectedFilterKey);
+-        if (!range.start && !range.end)
++        if (!range.start && !range.end && !_normalizedQuery)
+             return NotificationService.historyList;
+         return NotificationService.historyList.filter(n => {
++            if (!matchesQuery(n))
++                return false;
+             const ts = n.timestamp;
+             if (range.start && ts < range.start.getTime())
+                 return false;
+@@ -213,6 +233,23 @@
+         anchors.fill: parent
+         spacing: Theme.spacingS
+ 
++        DankTextField {
++            id: searchField
++            visible: root.searchAvailable
++            width: parent.width
++            height: 36
++            leftIconName: "search"
++            leftIconSize: Theme.iconSize - 4
++            showClearButton: true
++            ignoreUpDownKeys: true
++            placeholderText: "Buscar en el historial"
++            onTextChanged: {
++                root.searchQuery = text;
++                root.keyboardActive = false;
++                root.selectedIndex = -1;
++            }
++        }
++
+         DankFilterChips {
+             id: filterChips
+             width: parent.width
+@@ -229,7 +266,7 @@
+         DankListView {
+             id: historyListView
+             width: parent.width
+-            height: parent.height - filterChips.height - Theme.spacingS
++            height: parent.height - filterChips.height - Theme.spacingS - (searchField.visible ? searchField.height + Theme.spacingS : 0)
+             clip: true
+             spacing: Theme.spacingS
+             readonly property real horizontalShadowGutter: Theme.snap(Math.max(Theme.spacingXS, 4), 1)

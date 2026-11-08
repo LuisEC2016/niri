@@ -1,0 +1,20 @@
+[Unit]
+Description=Perfil de energia segun fuente de alimentacion (AC/bateria)
+Documentation=file://%h/.config/niri/scripts/power-profile-auto.sh
+# Se ata a la sesion grafica porque polkit concede el cambio de perfil a la
+# sesion activa; fuera de ella powerprofilesctl fallaria con "not authorized".
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.config/niri/scripts/power-profile-auto.sh
+Restart=on-failure
+RestartSec=5
+# Al parar el servicio se deja el equipo en un perfil neutro en vez de en
+# performance, que es donde suele quedarse si se para estando enchufado.
+ExecStop=/usr/bin/powerprofilesctl set balanced
+Nice=10
+
+[Install]
+WantedBy=graphical-session.target

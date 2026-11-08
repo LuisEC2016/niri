@@ -1,0 +1,560 @@
+--- a/Modules/Dock/DockApps.qml
++++ b/Modules/Dock/DockApps.qml
+@@ -43,6 +43,111 @@
+     }
+     readonly property real baseAppHeight: iconSize
+ 
++    // --- macOS-style magnification ---------------------------------------
++    // Every icon is sized by its distance to the pointer along the dock axis,
++    // so the hovered icon grows to appsDockEnlargePercentage and its neighbours
++    // fall off along a cosine curve, pushing each other outwards.
++    readonly property bool magnifyEnabled: SettingsData.appsDockEnlargeOnHover
++    readonly property real magnifyMaxScale: Math.max(1, SettingsData.appsDockEnlargePercentage / 100)
++    readonly property real magnifyCellExtent: iconSize * 1.2 + layoutFlow.spacing
++    readonly property real magnifyRange: magnifyCellExtent * 2.5
++    // Widest the row can ever get: the summed growth equals
++    // (scale - 1) * itemExtent * (range / cell) for a pointer mid-row.
++    // The input region is sized from this so hover never depends on the
++    // magnified width it produces.
++    readonly property real magnifyReserve: magnifyEnabled ? Math.ceil((magnifyMaxScale - 1) * iconSize * 1.2 * (magnifyRange / magnifyCellExtent) * 1.1) : 0
++    readonly property real magnifyReservedAxisExtent: baseAppWidth + magnifyReserve
++    // Icons are rasterised once at the largest size they can be shown at and
++    // scaled down when idle: resizing the source instead reloaded the texture
++    // every frame and the icon blinked while the async load was pending.
++    readonly property real magnifyRenderIconSize: iconSize * (magnifyEnabled ? magnifyMaxScale : 1)
++    property real magnifyCursorAxis: -1
++    property real magnifyStrength: 0
++    // Set from DockBody: the icon gaps are not covered by any button, so the
++    // dock-wide hover is what keeps magnification on while crossing them.
++    property bool magnifyDockHovered: false
++
++    onMagnifyDockHoveredChanged: {
++        if (!magnifyDockHovered)
++            magnifyReleaseTimer.restart();
++    }
++
++    Behavior on magnifyStrength {
++        NumberAnimation {
++            duration: Theme.shortDuration
++            easing.type: Easing.OutCubic
++        }
++    }
++
++    Behavior on magnifyCursorAxis {
++        enabled: root.magnifyStrength > 0
++        NumberAnimation {
++            duration: 45
++            easing.type: Easing.OutQuad
++        }
++    }
++
++    Timer {
++        id: magnifyReleaseTimer
++
++        interval: 90
++        onTriggered: {
++            if (!root.magnifyDockHovered)
++                root.magnifyStrength = 0;
++        }
++    }
++
++    function magnifyAxisExtent(item) {
++        if (!item)
++            return 0;
++        if (item.isInOverflow === true && !overflowExpanded)
++            return 0;
++        if (item.type === "separator")
++            return 8;
++        return iconSize * 1.2;
++    }
++
++    function magnifyBaseCenter(dockIndex) {
++        const items = repeater.dockItems;
++        let pos = 0;
++        for (let i = 0; i < items.length; i++) {
++            const extent = magnifyAxisExtent(items[i]);
++            if (extent <= 0)
++                continue;
++            if (i === dockIndex)
++                return pos + extent / 2;
++            pos += extent + layoutFlow.spacing;
++        }
++        return -1;
++    }
++
++    function magnifyScaleAt(axisCenter) {
++        if (!magnifyEnabled || magnifyStrength <= 0 || magnifyCursorAxis < 0 || axisCenter < 0)
++            return 1;
++        const distance = Math.abs(axisCenter - magnifyCursorAxis);
++        if (distance >= magnifyRange)
++            return 1;
++        const falloff = (1 + Math.cos(Math.PI * distance / magnifyRange)) / 2;
++        return 1 + (magnifyMaxScale - 1) * falloff * magnifyStrength;
++    }
++
++    // Pointer position arrives in scene coordinates: the layout centre is fixed
++    // (everything is centre-anchored), so converting through it keeps the cursor
++    // reading independent of the magnified widths it produces - no feedback loop.
++    function magnifyPointerMoved(sceneAxisPos) {
++        if (!magnifyEnabled)
++            return;
++        magnifyReleaseTimer.stop();
++        const centre = layoutFlow.mapToItem(null, layoutFlow.width / 2, layoutFlow.height / 2);
++        const layoutAxisCentre = isVertical ? centre.y : centre.x;
++        magnifyCursorAxis = sceneAxisPos - layoutAxisCentre + baseAppWidth / 2;
++        magnifyStrength = 1;
++    }
++
++    function magnifyPointerExited() {
++        magnifyReleaseTimer.restart();
++    }
++
+     clip: false
+     property bool _switchingPosition: false
+     implicitWidth: isVertical ? appLayout.height : appLayout.width
+@@ -78,7 +183,7 @@
+         height: layoutFlow.height
+ 
+         Behavior on width {
+-            enabled: !root._switchingPosition
++            enabled: !root._switchingPosition && root.magnifyStrength <= 0
+             NumberAnimation {
+                 duration: Theme.shortDuration
+                 easing.type: Easing.OutCubic
+@@ -86,7 +191,7 @@
+         }
+ 
+         Behavior on height {
+-            enabled: !root._switchingPosition
++            enabled: !root._switchingPosition && root.magnifyStrength <= 0
+             NumberAnimation {
+                 duration: Theme.shortDuration
+                 easing.type: Easing.OutCubic
+@@ -529,6 +634,9 @@
+                         }
+                     }
+                     property var itemData: modelData
++                    readonly property real magnifyAxisCenter: root.magnifyEnabled ? root.magnifyBaseCenter(index) : -1
++                    readonly property real magnifyScale: (itemData.type === "separator" || isInOverflow) ? 1 : root.magnifyScaleAt(magnifyAxisCenter)
++                    readonly property real magnifyCrossExtent: root.iconSize * magnifyScale
+                     readonly property bool isOverflowToggle: itemData.type === "overflow-toggle"
+                     readonly property bool isTrash: itemData.type === "trash"
+                     readonly property bool isInOverflow: itemData.isInOverflow === true
+@@ -549,8 +657,8 @@
+                     opacity: (isInOverflow && !root.overflowExpanded) ? 0 : 1
+                     scale: (isInOverflow && !root.overflowExpanded) ? 0.8 : 1
+ 
+-                    width: (isInOverflow && !root.overflowExpanded) ? 0 : (itemData.type === "separator" ? (root.isVertical ? root.iconSize : 8) : (root.isVertical ? root.iconSize : root.iconSize * 1.2))
+-                    height: (isInOverflow && !root.overflowExpanded) ? 0 : (itemData.type === "separator" ? (root.isVertical ? 8 : root.iconSize) : (root.isVertical ? root.iconSize * 1.2 : root.iconSize))
++                    width: (isInOverflow && !root.overflowExpanded) ? 0 : (itemData.type === "separator" ? (root.isVertical ? root.iconSize : 8) : (root.isVertical ? root.iconSize : root.iconSize * 1.2 * magnifyScale))
++                    height: (isInOverflow && !root.overflowExpanded) ? 0 : (itemData.type === "separator" ? (root.isVertical ? 8 : root.iconSize) : (root.isVertical ? root.iconSize * 1.2 * magnifyScale : root.iconSize))
+ 
+                     Behavior on opacity {
+                         NumberAnimation {
+@@ -648,9 +756,11 @@
+                         id: launcherButton
+                         visible: itemData.type === "launcher"
+                         anchors.centerIn: parent
+-                        width: delegateItem.width
+-                        height: delegateItem.height
+-                        actualIconSize: root.iconSize
++                        width: root.isVertical ? delegateItem.magnifyCrossExtent : delegateItem.width
++                        height: root.isVertical ? delegateItem.height : delegateItem.magnifyCrossExtent
++                        actualIconSize: root.magnifyRenderIconSize
++                        baseIconSize: root.iconSize
++                        magnifyScale: delegateItem.magnifyScale
+                         dockApps: root
+                         index: delegateItem.index
+                     }
+@@ -659,9 +769,11 @@
+                         id: trashButton
+                         visible: itemData.type === "trash"
+                         anchors.centerIn: parent
+-                        width: delegateItem.width
+-                        height: delegateItem.height
+-                        actualIconSize: root.iconSize
++                        width: root.isVertical ? delegateItem.magnifyCrossExtent : delegateItem.width
++                        height: root.isVertical ? delegateItem.height : delegateItem.magnifyCrossExtent
++                        actualIconSize: root.magnifyRenderIconSize
++                        baseIconSize: root.iconSize
++                        magnifyScale: delegateItem.magnifyScale
+                         dockApps: root
+                         contextMenu: root.trashContextMenu
+                         parentDockScreen: root.dockScreen
+@@ -671,9 +783,11 @@
+                         id: button
+                         visible: !isOverflowToggle && itemData.type !== "separator" && itemData.type !== "launcher" && itemData.type !== "trash"
+                         anchors.centerIn: parent
+-                        width: delegateItem.width
+-                        height: delegateItem.height
+-                        actualIconSize: root.iconSize
++                        width: root.isVertical ? delegateItem.magnifyCrossExtent : delegateItem.width
++                        height: root.isVertical ? delegateItem.height : delegateItem.magnifyCrossExtent
++                        actualIconSize: root.magnifyRenderIconSize
++                        baseIconSize: root.iconSize
++                        magnifyScale: delegateItem.magnifyScale
+                         appData: itemData
+                         contextMenu: root.contextMenu
+                         dockApps: root
+--- a/Modules/Dock/DockAppButton.qml
++++ b/Modules/Dock/DockAppButton.qml
+@@ -213,9 +213,39 @@
+             return;
+         CompositorService.activateToplevel(nextToplevel);
+     }
++    // --- macOS-style magnification ---------------------------------------
++    // baseIconSize is the unmagnified size DockApps lays out with; actualIconSize
++    // already carries the magnification factor. The offset anchors the growth to
++    // the dock edge so the icon rises out of the dock instead of straddling it.
++    property real baseIconSize: actualIconSize
++    property real magnifyScale: 1
++    readonly property bool macMagnify: dockApps ? dockApps.magnifyEnabled : false
++    // actualIconSize is the fixed rasterisation size; the visible icon is
++    // baseIconSize * magnifyScale, reached by scaling that texture.
++    readonly property real magnifyIconScale: actualIconSize > 0 ? baseIconSize * magnifyScale / actualIconSize : 1
++    readonly property real magnifyOffset: animationDirection * baseIconSize * (magnifyScale - 1) / 2
++
++    function reportMagnifyPointer(localX, localY) {
++        if (!dockApps || !dockApps.magnifyEnabled)
++            return;
++        const scenePos = mapToItem(null, localX, localY);
++        dockApps.magnifyPointerMoved(isVertical ? scenePos.y : scenePos.x);
++    }
++
+     onIsHoveredChanged: {
++        if (isHovered)
++            reportMagnifyPointer(mouseArea.mouseX, mouseArea.mouseY);
++        else if (dockApps)
++            dockApps.magnifyPointerExited();
+         if (mouseArea.pressed || dragging)
+             return;
++        if (macMagnify) {
++            // macOS magnifies on hover instead of nudging the icon.
++            bounceAnimation.stop();
++            if (hoverAnimOffset !== 0)
++                exitAnimation.restart();
++            return;
++        }
+         if (isHovered) {
+             exitAnimation.stop();
+             if (!bounceAnimation.running) {
+@@ -267,16 +297,51 @@
+ 
+     property real launchAnimOffset: 0
+     property real launchAnimScale: 1
++    // macOS keeps bouncing the icon until the app it launched actually opens.
++    property bool launchPending: false
+ 
+     function playLaunchAnimation() {
++        launchPending = !shouldShowIndicator;
++        if (launchPending)
++            launchPendingTimeout.restart();
++        launchRestartTimer.stop();
+         launchAnimation.restart();
+     }
+ 
++    onShouldShowIndicatorChanged: {
++        if (shouldShowIndicator) {
++            launchPending = false;
++            launchPendingTimeout.stop();
++        }
++    }
++
++    Timer {
++        id: launchPendingTimeout
++
++        // Give up rather than bounce forever when the launch fails silently.
++        interval: 10000
++        onTriggered: root.launchPending = false
++    }
++
++    Timer {
++        id: launchRestartTimer
++
++        interval: 120
++        onTriggered: {
++            if (root.launchPending)
++                launchAnimation.restart();
++        }
++    }
++
+     SequentialAnimation {
+         id: launchAnimation
+ 
+         running: false
+         alwaysRunToEnd: true
++        onFinished: {
++            if (root.launchPending)
++                launchRestartTimer.restart();
++        }
+ 
+         NumberAnimation {
+             target: root
+@@ -514,6 +579,8 @@
+             }
+         }
+         onPositionChanged: mouse => {
++            if (!dragging)
++                reportMagnifyPointer(mouse.x, mouse.y);
+             if (longPressing && !dragging) {
+                 const distance = Math.sqrt(Math.pow(mouse.x - dragStartPos.x, 2) + Math.pow(mouse.y - dragStartPos.y, 2));
+                 if (distance > 5) {
+@@ -599,14 +666,14 @@
+                     if (dragging && !isVertical)
+                         return dragAxisOffset;
+                     if (!dragging && isVertical)
+-                        return hoverAnimOffset + root.launchAnimOffset;
++                        return hoverAnimOffset + root.launchAnimOffset + root.magnifyOffset;
+                     return 0;
+                 }
+                 y: {
+                     if (dragging && isVertical)
+                         return dragAxisOffset;
+                     if (!dragging && !isVertical)
+-                        return hoverAnimOffset + root.launchAnimOffset;
++                        return hoverAnimOffset + root.launchAnimOffset + root.magnifyOffset;
+                     return 0;
+                 }
+             },
+@@ -645,6 +712,8 @@
+             id: coreIcon
+ 
+             anchors.centerIn: parent
++            scale: root.magnifyIconScale
++            transformOrigin: Item.Center
+             iconSize: actualIconSize
+             iconValue: appData && appData.isCoreApp && appData.coreAppData ? (appData.coreAppData.icon || "") : ""
+             colorOverride: effectiveCoreIconColor
+@@ -658,6 +727,8 @@
+             id: iconImg
+ 
+             anchors.centerIn: parent
++            scale: root.magnifyIconScale
++            transformOrigin: Item.Center
+             implicitSize: appData && (appData.appId === "org.quickshell" || appData.appId === "com.danklinux.dms") ? actualIconSize * 0.85 : actualIconSize
+             source: {
+                 if (!appData || appData.appId === "__SEPARATOR__") {
+@@ -687,6 +758,8 @@
+             width: actualIconSize
+             height: actualIconSize
+             anchors.centerIn: parent
++            scale: root.magnifyIconScale
++            transformOrigin: Item.Center
+             visible: !coreIcon.visible && iconImg.status !== Image.Ready && appData && appData.appId && !Paths.isSteamApp(appData.appId)
+             opacity: root.isMinimized ? 0.4 : 1
+             color: Theme.surfaceLight
+@@ -717,6 +790,8 @@
+ 
+         DankIcon {
+             anchors.centerIn: parent
++            scale: root.magnifyIconScale
++            transformOrigin: Item.Center
+             size: actualIconSize
+             name: "sports_esports"
+             color: Theme.surfaceText
+--- a/Modules/Dock/DockLauncherButton.qml
++++ b/Modules/Dock/DockLauncherButton.qml
+@@ -31,9 +31,38 @@
+         return override;
+     }
+ 
++    // --- macOS-style magnification ---------------------------------------
++    // baseIconSize is the unmagnified size DockApps lays out with; actualIconSize
++    // already carries the magnification factor. The offset anchors the growth to
++    // the dock edge so the icon rises out of the dock instead of straddling it.
++    property real baseIconSize: actualIconSize
++    property real magnifyScale: 1
++    readonly property bool macMagnify: dockApps ? dockApps.magnifyEnabled : false
++    // actualIconSize is the fixed rasterisation size; the visible icon is
++    // baseIconSize * magnifyScale, reached by scaling that texture.
++    readonly property real magnifyIconScale: actualIconSize > 0 ? baseIconSize * magnifyScale / actualIconSize : 1
++    readonly property real magnifyOffset: animationDirection * baseIconSize * (magnifyScale - 1) / 2
++
++    function reportMagnifyPointer(localX, localY) {
++        if (!dockApps || !dockApps.magnifyEnabled)
++            return;
++        const scenePos = mapToItem(null, localX, localY);
++        dockApps.magnifyPointerMoved(isVertical ? scenePos.y : scenePos.x);
++    }
++
+     onIsHoveredChanged: {
++        if (isHovered)
++            reportMagnifyPointer(mouseArea.mouseX, mouseArea.mouseY);
++        else if (dockApps)
++            dockApps.magnifyPointerExited();
+         if (mouseArea.pressed || dragging)
+             return;
++        if (macMagnify) {
++            bounceAnimation.stop();
++            if (hoverAnimOffset !== 0)
++                exitAnimation.restart();
++            return;
++        }
+         if (isHovered) {
+             exitAnimation.stop();
+             if (!bounceAnimation.running) {
+@@ -147,6 +176,8 @@
+             PopoutService.toggleDankLauncherV2(dockApps?.usesOverlayLayer ?? false);
+         }
+         onPositionChanged: mouse => {
++            if (!dragging)
++                reportMagnifyPointer(mouse.x, mouse.y);
+             if (longPressing && !dragging) {
+                 const distance = Math.sqrt(Math.pow(mouse.x - dragStartPos.x, 2) + Math.pow(mouse.y - dragStartPos.y, 2));
+                 if (distance > 5) {
+@@ -185,12 +216,14 @@
+         anchors.fill: parent
+ 
+         transform: Translate {
+-            x: dragging && !isVertical ? dragAxisOffset : (!dragging && isVertical ? hoverAnimOffset : 0)
+-            y: dragging && isVertical ? dragAxisOffset : (!dragging && !isVertical ? hoverAnimOffset : 0)
++            x: dragging && !isVertical ? dragAxisOffset : (!dragging && isVertical ? hoverAnimOffset + root.magnifyOffset : 0)
++            y: dragging && isVertical ? dragAxisOffset : (!dragging && !isVertical ? hoverAnimOffset + root.magnifyOffset : 0)
+         }
+ 
+         Item {
+             anchors.centerIn: parent
++            scale: root.magnifyIconScale
++            transformOrigin: Item.Center
+             width: actualIconSize
+             height: actualIconSize
+ 
+--- a/Modules/Dock/DockTrashButton.qml
++++ b/Modules/Dock/DockTrashButton.qml
+@@ -33,9 +33,38 @@
+         }
+     }
+ 
++    // --- macOS-style magnification ---------------------------------------
++    // baseIconSize is the unmagnified size DockApps lays out with; actualIconSize
++    // already carries the magnification factor. The offset anchors the growth to
++    // the dock edge so the icon rises out of the dock instead of straddling it.
++    property real baseIconSize: actualIconSize
++    property real magnifyScale: 1
++    readonly property bool macMagnify: dockApps ? dockApps.magnifyEnabled : false
++    // actualIconSize is the fixed rasterisation size; the visible icon is
++    // baseIconSize * magnifyScale, reached by scaling that texture.
++    readonly property real magnifyIconScale: actualIconSize > 0 ? baseIconSize * magnifyScale / actualIconSize : 1
++    readonly property real magnifyOffset: animationDirection * baseIconSize * (magnifyScale - 1) / 2
++
++    function reportMagnifyPointer(localX, localY) {
++        if (!dockApps || !dockApps.magnifyEnabled)
++            return;
++        const scenePos = mapToItem(null, localX, localY);
++        dockApps.magnifyPointerMoved(isVertical ? scenePos.y : scenePos.x);
++    }
++
+     onIsHoveredChanged: {
++        if (isHovered)
++            reportMagnifyPointer(mouseArea.mouseX, mouseArea.mouseY);
++        else if (dockApps)
++            dockApps.magnifyPointerExited();
+         if (mouseArea.pressed)
+             return;
++        if (macMagnify) {
++            bounceAnimation.stop();
++            if (hoverAnimOffset !== 0)
++                exitAnimation.restart();
++            return;
++        }
+         if (!isHovered) {
+             bounceAnimation.stop();
+             exitAnimation.restart();
+@@ -87,6 +116,8 @@
+         cursorShape: Qt.PointingHandCursor
+         acceptedButtons: Qt.LeftButton | Qt.RightButton
+ 
++        onPositionChanged: mouse => root.reportMagnifyPointer(mouse.x, mouse.y)
++
+         onClicked: mouse => {
+             switch (mouse.button) {
+             case Qt.LeftButton:
+@@ -104,12 +135,14 @@
+         anchors.fill: parent
+ 
+         transform: Translate {
+-            x: isVertical ? hoverAnimOffset : 0
+-            y: isVertical ? 0 : hoverAnimOffset
++            x: isVertical ? hoverAnimOffset + root.magnifyOffset : 0
++            y: isVertical ? 0 : hoverAnimOffset + root.magnifyOffset
+         }
+ 
+         Item {
+             anchors.centerIn: parent
++            scale: root.magnifyIconScale
++            transformOrigin: Item.Center
+             width: actualIconSize - 4
+             height: actualIconSize - 4
+ 
+--- a/Modules/Dock/DockBody.qml
++++ b/Modules/Dock/DockBody.qml
+@@ -436,7 +436,13 @@
+         return dock.dockReserveZone;
+     }
+ 
+-    property real animationHeadroom: Math.ceil(SettingsData.dockIconSize * 0.35)
++    // Magnified icons rise fully out of the dock, so the surface has to be as
++    // tall as the whole growth (iconSize * (scale - 1)), not just the old nudge.
++    // Reach of the hover area into the screen, matching maskItem.innerReach:
++    // without it the pointer can sit on a magnified icon and get no hover.
++    readonly property real magnifyHoverReach: SettingsData.appsDockEnlargeOnHover ? animationHeadroom : 0
++    readonly property real magnifyGrowthRatio: SettingsData.appsDockEnlargeOnHover ? Math.max(0, SettingsData.appsDockEnlargePercentage / 100 - 1) : 0
++    property real animationHeadroom: Math.ceil(SettingsData.dockIconSize * Math.max(0.35, magnifyGrowthRatio + 0.06))
+ 
+     readonly property real surfaceImplicitWidth: isVertical ? (Theme.px(dockGeometry.surfaceThickness + SettingsData.dockIconSize * 0.3, _dpr) + animationHeadroom) : 0
+     readonly property real surfaceImplicitHeight: !isVertical ? (Theme.px(dockGeometry.surfaceThickness + SettingsData.dockIconSize * 0.3, _dpr) + animationHeadroom) : 0
+@@ -563,11 +569,15 @@
+         const btnW = dock.hoveredButton.width;
+         const btnH = dock.hoveredButton.height;
+ 
++        // A magnified icon rises out of the dock, so the label has to clear the
++        // icon itself, not just the dock body.
++        const magnifyRise = Math.max(0, (dock.isVertical ? btnW : btnH) - dock.widgetHeight);
++
+         if (!dock.isVertical) {
+             const isBottom = SettingsData.dockPosition === SettingsData.Position.Bottom;
+             const tooltipX = buttonLocalPos.x + btnW / 2 + adjacentLeftBarWidth;
+             const tooltipHeight = 32;
+-            const totalFromEdge = bgMargin + dockBackground.height + dock.borderThickness + gap;
++            const totalFromEdge = bgMargin + dockBackground.height + dock.borderThickness + gap + magnifyRise;
+             const screenRelativeY = isBottom ? (screenHeight - totalFromEdge - tooltipHeight) : totalFromEdge;
+             dockTooltip.show(tooltipText, tooltipX, screenRelativeY, dock.screen, false, false);
+             return;
+@@ -575,7 +585,7 @@
+ 
+         const isLeft = SettingsData.dockPosition === SettingsData.Position.Left;
+         const screenWidth = dock.screen ? dock.screen.width : 0;
+-        const totalFromEdge = bgMargin + dockBackground.width + dock.borderThickness + gap;
++        const totalFromEdge = bgMargin + dockBackground.width + dock.borderThickness + gap + magnifyRise;
+         const tooltipX = isLeft ? totalFromEdge : (screenWidth - totalFromEdge);
+         const screenRelativeY = buttonLocalPos.y + btnH / 2 + adjacentTopBarHeight;
+         dockTooltip.show(tooltipText, tooltipX, screenRelativeY, dock.screen, isLeft, !isLeft);
+@@ -627,16 +637,16 @@
+ 
+             height: {
+                 if (dock.isVertical) {
+-                    const h = dockApps.implicitWidth + SettingsData.dockSpacing * 2;
++                    const h = dockApps.magnifyReservedAxisExtent + SettingsData.dockSpacing * 2;
+                     return Math.min(Math.max(h + 64, 200), maxDockHeight);
+                 }
+-                return dock.reveal ? Theme.px(dockGeometry.motionThickness, _dpr) : 1;
++                return dock.reveal ? Theme.px(dockGeometry.motionThickness, _dpr) + dock.magnifyHoverReach : 1;
+             }
+             width: {
+                 if (dock.isVertical) {
+-                    return dock.reveal ? Theme.px(dockGeometry.motionThickness, _dpr) : 1;
++                    return dock.reveal ? Theme.px(dockGeometry.motionThickness, _dpr) + dock.magnifyHoverReach : 1;
+                 }
+-                const w = dockApps.implicitWidth + SettingsData.dockSpacing * 2;
++                const w = dockApps.magnifyReservedAxisExtent + SettingsData.dockSpacing * 2;
+                 return Math.min(w + 8 + dock.borderThickness, maxDockWidth);
+             }
+             x: !dock.isVertical ? Math.round((parent.width - width) / 2) : (SettingsData.dockPosition === SettingsData.Position.Right ? parent.width - width : 0)
+@@ -869,6 +879,7 @@
+                     dockScreen: dock.screen
+                     iconSize: dock.widgetHeight
+                     usesOverlayLayer: dock.usesOverlayLayer
++                    magnifyDockHovered: dockMouseArea.containsMouse
+                 }
+             }
+         }

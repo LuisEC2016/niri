@@ -1,0 +1,347 @@
+--- a/Widgets/DankOSD.qml
++++ b/Widgets/DankOSD.qml
+@@ -21,6 +21,7 @@
+     property real osdHeight: Theme.iconSize + Theme.spacingS * 2
+     property int animationDuration: Theme.mediumDuration
+     property var animationEasing: Theme.emphasizedEasing
++    property real osdRadius: Theme.cornerRadius
+ 
+     signal osdShown
+     signal osdHidden
+@@ -106,7 +107,7 @@
+         blurY: shadowBuffer
+         blurWidth: shouldBeVisible ? alignedWidth : 0
+         blurHeight: shouldBeVisible ? alignedHeight : 0
+-        blurRadius: Theme.cornerRadius
++        blurRadius: root.osdRadius
+     }
+ 
+     color: "transparent"
+@@ -290,7 +291,7 @@
+         Rectangle {
+             id: background
+             anchors.fill: parent
+-            radius: Theme.cornerRadius
++            radius: root.osdRadius
+             color: "transparent"
+             border.color: BlurService.borderColor
+             border.width: BlurService.borderWidth
+@@ -303,7 +304,7 @@
+             z: -1
+             level: Theme.elevationLevel3
+             fallbackOffset: 6
+-            targetRadius: Theme.cornerRadius
++            targetRadius: root.osdRadius
+             targetColor: Theme.withAlpha(Theme.surfaceContainer, osdContainer.popupSurfaceAlpha)
+             borderColor: Theme.outlineMedium
+             borderWidth: 1
+--- a/Modules/OSD/VolumeOSD.qml
++++ b/Modules/OSD/VolumeOSD.qml
+@@ -17,8 +17,9 @@
+ 
+     readonly property real osdValueReserve: SettingsData.osdAlwaysShowValue ? 48 : 0
+ 
+-    osdWidth: useVertical ? (40 + Theme.spacingS * 2) : Math.min(216 + osdValueReserve, screenWidth - Theme.spacingM * 2)
+-    osdHeight: useVertical ? Math.min(260, screenHeight - Theme.spacingM * 2) : (40 + Theme.spacingS * 2)
++    osdWidth: useVertical ? (40 + Theme.spacingS * 2) : Math.min(244, screenWidth - Theme.spacingM * 2)
++    osdHeight: useVertical ? Math.min(260, screenHeight - Theme.spacingM * 2) : 62
++    osdRadius: useVertical ? Theme.cornerRadius : 16
+     autoHideInterval: 3000
+     enableMouseInteraction: true
+ 
+@@ -63,9 +64,11 @@
+                 onClicked: root.hide()
+             }
+ 
+-            OsdLevelRow {
++            OsdMacLevel {
+                 anchors.fill: parent
++                title: AudioService.displayName(AudioService.sink) || I18n.tr("Sound")
+                 iconName: AudioService.sinkVolumeIconName
++                muted: !!AudioService.sink?.audio?.muted
+                 iconInteractive: true
+                 value: root._displayVolume
+                 minimum: 0
+--- a/Modules/OSD/MicVolumeOSD.qml
++++ b/Modules/OSD/MicVolumeOSD.qml
+@@ -17,8 +17,9 @@
+ 
+     readonly property real osdValueReserve: SettingsData.osdAlwaysShowValue ? 48 : 0
+ 
+-    osdWidth: useVertical ? (40 + Theme.spacingS * 2) : Math.min(216 + osdValueReserve, screenWidth - Theme.spacingM * 2)
+-    osdHeight: useVertical ? Math.min(260, screenHeight - Theme.spacingM * 2) : (40 + Theme.spacingS * 2)
++    osdWidth: useVertical ? (40 + Theme.spacingS * 2) : Math.min(244, screenWidth - Theme.spacingM * 2)
++    osdHeight: useVertical ? Math.min(260, screenHeight - Theme.spacingM * 2) : 62
++    osdRadius: useVertical ? Theme.cornerRadius : 16
+     autoHideInterval: 3000
+     enableMouseInteraction: true
+ 
+@@ -68,10 +69,12 @@
+                 onClicked: root.hide()
+             }
+ 
+-            OsdLevelRow {
++            OsdMacLevel {
+                 anchors.fill: parent
++                title: AudioService.displayName(AudioService.source) || I18n.tr("Microphone")
+                 iconName: AudioService.source?.audio?.muted ? "mic_off" : "mic"
+-                iconColor: AudioService.source?.audio?.muted ? Theme.error : Theme.surfaceText
++                iconColor: AudioService.source?.audio?.muted ? Theme.error : onFillColor
++                muted: !!AudioService.source?.audio?.muted
+                 iconInteractive: true
+                 value: root._displayVolume
+                 minimum: 0
+--- a/Modules/OSD/MediaVolumeOSD.qml
++++ b/Modules/OSD/MediaVolumeOSD.qml
+@@ -32,8 +32,9 @@
+ 
+     readonly property real osdValueReserve: SettingsData.osdAlwaysShowValue ? 48 : 0
+ 
+-    osdWidth: useVertical ? (40 + Theme.spacingS * 2) : Math.min(216 + osdValueReserve, screenWidth - Theme.spacingM * 2)
+-    osdHeight: useVertical ? Math.min(260, screenHeight - Theme.spacingM * 2) : (40 + Theme.spacingS * 2)
++    osdWidth: useVertical ? (40 + Theme.spacingS * 2) : Math.min(244, screenWidth - Theme.spacingM * 2)
++    osdHeight: useVertical ? Math.min(260, screenHeight - Theme.spacingM * 2) : 62
++    osdRadius: useVertical ? Theme.cornerRadius : 16
+     autoHideInterval: 3000
+     enableMouseInteraction: true
+ 
+@@ -84,9 +85,11 @@
+                 onClicked: root.hide()
+             }
+ 
+-            OsdLevelRow {
++            OsdMacLevel {
+                 anchors.fill: parent
++                title: player?.identity || I18n.tr("Media")
+                 iconName: getVolumeIcon(player?.volume ?? 0)
++                muted: (player?.volume ?? 0) === 0
+                 iconInteractive: true
+                 value: root._displayVolume
+                 minimum: 0
+--- a/Modules/OSD/BrightnessOSD.qml
++++ b/Modules/OSD/BrightnessOSD.qml
+@@ -15,8 +15,9 @@
+ 
+     readonly property real osdValueReserve: SettingsData.osdAlwaysShowValue ? 48 : 0
+ 
+-    osdWidth: useVertical ? (40 + Theme.spacingS * 2) : Math.min(216 + osdValueReserve, screenWidth - Theme.spacingM * 2)
+-    osdHeight: useVertical ? Math.min(260, screenHeight - Theme.spacingM * 2) : (40 + Theme.spacingS * 2)
++    osdWidth: useVertical ? (40 + Theme.spacingS * 2) : Math.min(244, screenWidth - Theme.spacingM * 2)
++    osdHeight: useVertical ? Math.min(260, screenHeight - Theme.spacingM * 2) : 62
++    osdRadius: useVertical ? Theme.cornerRadius : 16
+     autoHideInterval: 3000
+     enableMouseInteraction: true
+ 
+@@ -45,10 +46,10 @@
+                 onClicked: root.hide()
+             }
+ 
+-            OsdLevelRow {
++            OsdMacLevel {
+                 anchors.fill: parent
++                title: I18n.tr("Brightness")
+                 iconName: DisplayService.brightnessIconName(DisplayService.getCurrentDeviceInfo())
+-                iconColor: Theme.primary
+                 value: root._displayBrightness
+                 minimum: DisplayService.brightnessMinimum(DisplayService.getCurrentDeviceInfo())
+                 maximum: DisplayService.brightnessMaximum(DisplayService.getCurrentDeviceInfo())
+--- /dev/null
++++ b/Modules/OSD/OsdMacLevel.qml
+@@ -0,0 +1,197 @@
++pragma ComponentBehavior: Bound
++
++import QtQuick
++import qs.Common
++import qs.Widgets
++
++// macOS Control Center style level: bold title over a thick capsule whose
++// white fill carries the icon. Drop-in for OsdLevelRow in the OSD popups.
++Item {
++    id: root
++
++    property string title: ""
++    property string iconName: "volume_up"
++    property color iconColor: root.onFillColor
++    property bool iconInteractive: false
++    property int value: 0
++    property int minimum: 0
++    property int maximum: 100
++    property string unit: "%"
++    property string displayText: ""
++    property bool muted: false
++    property bool sliderEnabled: true
++    property int wheelStep: 5
++
++    readonly property bool isLight: SessionData.isLightMode
++    readonly property color onFillColor: Qt.rgba(0.11, 0.11, 0.12, 0.72)
++    readonly property color fillColor: isLight ? "#ffffff" : Qt.rgba(1, 1, 1, 0.94)
++    readonly property color trackColor: isLight ? Qt.rgba(0, 0, 0, 0.10) : Qt.rgba(1, 1, 1, 0.14)
++    readonly property real padding: 12
++    readonly property real capsuleHeight: 18
++
++    readonly property bool containsMouse: capsuleArea.containsMouse || iconArea.containsMouse
++    readonly property bool isDragging: capsuleArea.pressed
++    readonly property real ratio: {
++        const span = Math.max(1, root.maximum - root.minimum);
++        return Math.max(0, Math.min(1, (root.value - root.minimum) / span));
++    }
++
++    signal sliderValueChanged(int newValue)
++    signal iconClicked
++    signal hoverChanged(bool hovered)
++
++    onContainsMouseChanged: root.hoverChanged(root.containsMouse)
++
++    function valueAt(x) {
++        const travel = Math.max(1, capsule.width - capsule.height);
++        const r = Math.max(0, Math.min(1, (x - capsule.height / 2) / travel));
++        return Math.round(root.minimum + r * (root.maximum - root.minimum));
++    }
++
++    function emitValue(v) {
++        const clamped = Math.max(root.minimum, Math.min(root.maximum, v));
++        if (clamped !== root.value)
++            root.sliderValueChanged(clamped);
++    }
++
++    StyledText {
++        id: titleLabel
++
++        anchors {
++            left: parent.left
++            leftMargin: root.padding + 1
++            right: statusLabel.left
++            rightMargin: Theme.spacingS
++            top: parent.top
++            topMargin: root.padding - 2
++        }
++        text: root.title
++        elide: Text.ElideRight
++        color: Theme.withAlpha(Theme.surfaceText, 0.92)
++        font.pixelSize: 12
++        font.weight: Font.DemiBold
++        font.letterSpacing: 0.1
++    }
++
++    StyledText {
++        id: statusLabel
++
++        anchors {
++            right: parent.right
++            rightMargin: root.padding + 1
++            baseline: titleLabel.baseline
++        }
++        text: root.displayText.length > 0 ? root.displayText : (SettingsData.osdAlwaysShowValue ? Math.round(root.value) + root.unit : "")
++        color: Theme.withAlpha(Theme.surfaceText, 0.5)
++        font.pixelSize: 11
++        font.weight: Font.Medium
++        font.features: {
++            "tnum": 1
++        }
++    }
++
++    Rectangle {
++        id: capsule
++
++        anchors {
++            left: parent.left
++            leftMargin: root.padding
++            right: parent.right
++            rightMargin: root.padding
++            bottom: parent.bottom
++            bottomMargin: root.padding
++        }
++        height: root.capsuleHeight
++        radius: height / 2
++        color: root.trackColor
++        border.width: root.isLight ? 1 : 0
++        border.color: Qt.rgba(0, 0, 0, 0.06)
++        opacity: root.sliderEnabled ? 1 : 0.5
++
++        Rectangle {
++            id: fill
++
++            anchors {
++                left: parent.left
++                top: parent.top
++                bottom: parent.bottom
++            }
++            width: capsule.height + (capsule.width - capsule.height) * root.ratio
++            radius: height / 2
++            color: root.fillColor
++            opacity: root.muted ? 0.45 : 1
++
++            Behavior on width {
++                enabled: !root.isDragging
++                NumberAnimation {
++                    duration: 140
++                    easing.type: Easing.OutCubic
++                }
++            }
++
++            Behavior on opacity {
++                NumberAnimation {
++                    duration: 160
++                }
++            }
++        }
++
++        MouseArea {
++            id: capsuleArea
++
++            anchors.fill: parent
++            enabled: root.sliderEnabled
++            hoverEnabled: true
++            preventStealing: true
++            cursorShape: Qt.PointingHandCursor
++            onPressed: mouse => root.emitValue(root.valueAt(mouse.x))
++            onPositionChanged: mouse => {
++                if (pressed)
++                    root.emitValue(root.valueAt(mouse.x));
++            }
++            onWheel: wheel => {
++                const delta = wheel.angleDelta.y !== 0 ? wheel.angleDelta.y : -wheel.angleDelta.x;
++                if (delta === 0)
++                    return;
++                root.emitValue(root.value + (delta > 0 ? root.wheelStep : -root.wheelStep));
++            }
++        }
++
++        Item {
++            id: iconSlot
++
++            anchors {
++                left: parent.left
++                top: parent.top
++                bottom: parent.bottom
++            }
++            width: capsule.height
++
++            DankIcon {
++                anchors.centerIn: parent
++                name: root.iconName
++                size: 12
++                filled: true
++                color: root.iconColor
++                scale: iconArea.containsMouse && root.iconInteractive ? 1.12 : 1
++
++                Behavior on scale {
++                    NumberAnimation {
++                        duration: 120
++                        easing.type: Easing.OutCubic
++                    }
++                }
++            }
++
++            MouseArea {
++                id: iconArea
++
++                anchors.fill: parent
++                enabled: root.iconInteractive
++                hoverEnabled: true
++                cursorShape: Qt.PointingHandCursor
++                onClicked: root.iconClicked()
++            }
++        }
++    }
++}

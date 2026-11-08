@@ -1,0 +1,141 @@
+--- a/Services/NotificationService.qml
++++ b/Services/NotificationService.qml
+@@ -627,6 +627,62 @@
+         }
+     }
+ 
++    // Parche local 07: horas silenciosas (idea de iNiR, services/Notifications.qml).
++    // Dentro de la ventana diaria los popups y el sonido se comportan como con
++    // No molestar, sin tocar SessionData.doNotDisturb: el DND manual sigue siendo
++    // del usuario. Críticas y reglas bypassDnd pasan igual que con DND. Si el
++    // fin es anterior al inicio, la ventana cruza la medianoche. Una hora mal
++    // escrita desactiva la ventana en vez de adivinar.
++    readonly property bool quietHoursEnabled: true
++    readonly property string quietHoursStart: "22:00"
++    readonly property string quietHoursEnd: "08:00"
++    property int _quietNowMin: _minutesOfDay(new Date())
++
++    function _minutesOfDay(d) {
++        return d.getHours() * 60 + d.getMinutes();
++    }
++
++    function _parseHourMinute(s) {
++        const m = /^(\d{1,2}):(\d{2})$/.exec(String(s).trim());
++        if (!m)
++            return -1;
++        const h = parseInt(m[1], 10), min = parseInt(m[2], 10);
++        return h > 23 || min > 59 ? -1 : h * 60 + min;
++    }
++
++    readonly property bool quietHoursActive: {
++        if (!quietHoursEnabled)
++            return false;
++        const start = _parseHourMinute(quietHoursStart);
++        const end = _parseHourMinute(quietHoursEnd);
++        if (start < 0 || end < 0 || start === end)
++            return false;
++        const now = _quietNowMin;
++        return start < end ? (now >= start && now < end) : (now >= start || now < end);
++    }
++
++    readonly property bool dndActive: SessionData.doNotDisturb || quietHoursActive
++
++    Timer {
++        interval: 30000
++        repeat: true
++        running: root.quietHoursEnabled
++        onTriggered: root._quietNowMin = root._minutesOfDay(new Date())
++    }
++
++    onQuietHoursActiveChanged: _applyDndToPopups()
++
++    function _applyDndToPopups() {
++        if (dndActive) {
++            notificationQueue = notificationQueue.filter(w => w && _allowedInDnd(w.urgency, w.bypassDnd));
++            for (const notif of visibleNotifications) {
++                if (!_allowedInDnd(notif.urgency, notif.bypassDnd))
++                    notif.popup = false;
++            }
++        }
++        processQueue();
++    }
++
+     Timer {
+         id: dismissPump
+         interval: _dismissTickMs
+@@ -726,7 +782,7 @@
+             const soundHints = notif.hints || {};
+             const suppressSound = !!soundHints["suppress-sound"];
+             const requestsSound = !!soundHints["sound-name"];
+-            const dndBlocked = SessionData.doNotDisturb && !_allowedInDnd(policy.urgency, policy.bypassDnd);
++            const dndBlocked = root.dndActive && !_allowedInDnd(policy.urgency, policy.bypassDnd);
+             if (!dndBlocked && SettingsData.soundsEnabled && (SettingsData.soundNewNotification || requestsSound) && !suppressSound) {
+                 if (policy.urgency === NotificationUrgency.Critical) {
+                     AudioService.playCriticalNotificationSound();
+@@ -1133,7 +1189,7 @@
+             return;
+         if (popupsDisabled)
+             return;
+-        const nextIndex = notificationQueue.findIndex(w => w && (!SessionData.doNotDisturb || _allowedInDnd(w.urgency, w.bypassDnd)));
++        const nextIndex = notificationQueue.findIndex(w => w && (!root.dndActive || _allowedInDnd(w.urgency, w.bypassDnd)));
+         if (nextIndex === -1)
+             return;
+ 
+@@ -1462,14 +1518,7 @@
+     Connections {
+         target: SessionData
+         function onDoNotDisturbChanged() {
+-            if (SessionData.doNotDisturb) {
+-                notificationQueue = notificationQueue.filter(w => w && _allowedInDnd(w.urgency, w.bypassDnd));
+-                for (const notif of visibleNotifications) {
+-                    if (!_allowedInDnd(notif.urgency, notif.bypassDnd))
+-                        notif.popup = false;
+-                }
+-            }
+-            processQueue();
++            root._applyDndToPopups();
+         }
+     }
+ 
+--- a/Modules/DankBar/Widgets/NotificationCenterButton.qml
++++ b/Modules/DankBar/Widgets/NotificationCenterButton.qml
+@@ -2,6 +2,7 @@
+ import qs.Common
+ import qs.Modules.Notifications.Center
+ import qs.Modules.Plugins
++import qs.Services
+ import qs.Widgets
+ 
+ BasePill {
+@@ -18,9 +19,9 @@
+             DankIcon {
+                 id: notifIcon
+                 anchors.centerIn: parent
+-                name: SessionData.doNotDisturb ? "notifications_off" : "notifications"
++                name: NotificationService.dndActive ? "notifications_off" : "notifications"
+                 size: Theme.barIconSize(root.barThickness, -4, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
+-                color: SessionData.doNotDisturb ? Theme.primary : (root.isActive ? Theme.primary : Theme.widgetIconColor)
++                color: NotificationService.dndActive ? Theme.primary : (root.isActive ? Theme.primary : Theme.widgetIconColor)
+             }
+ 
+             Rectangle {
+--- a/Modules/ControlCenter/Widgets/DndPill.qml
++++ b/Modules/ControlCenter/Widgets/DndPill.qml
+@@ -1,6 +1,7 @@
+ import QtQuick
+ import qs.Common
+ import qs.Modules.ControlCenter.Widgets
++import qs.Services
+ 
+ CompoundPill {
+     id: root
+@@ -11,6 +12,9 @@
+     isActive: SessionData.doNotDisturb
+ 
+     secondaryText: {
++        // Parche local 07: sin DND manual, avisar si mandan las horas silenciosas.
++        if (!SessionData.doNotDisturb && NotificationService.quietHoursActive)
++            return "Silencio hasta " + NotificationService.quietHoursEnd;
+         if (!SessionData.doNotDisturb)
+             return I18n.tr("Off");
+         if (SessionData.doNotDisturbUntil <= 0)

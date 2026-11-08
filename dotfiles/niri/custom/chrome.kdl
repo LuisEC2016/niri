@@ -1,0 +1,76 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Chrome en niri.
+//
+// Se incluye DESPUÉS de custom/blur.kdl a propósito: aquí se APAGA el blur que
+// la regla `is-floating=true` de blur.kdl encendería sobre el picture-in-picture.
+// En niri las window-rules se aplican en orden y la última gana.
+//
+// Estado medido el 2026-09-07 (Chrome 152.0.7977.82, iGPU Raptor Lake-P):
+//   · Chrome ya corre Wayland nativo (--ozone-platform=wayland en el cmdline).
+//   · VA-API ya está activa sin ningún flag: 12 s de reproducción dieron
+//     861 ms de drm-engine-video en H.264 y 469 ms en VP9 (fdinfo i915).
+//   · AV1 dio 0 ns → no hay decodificador AV1 en esta GPU (vainfo no lista
+//     ningún VAProfileAV1*). Eso se arregla en el navegador, no aquí.
+//   · niri no expone wp_linux_drm_syncobj_v1, wp_content_type_v1 ni
+//     wp_color_management_v1 — Chrome loguea "Failed to bind" para los tres.
+//     No hay nada que configurar en ese frente hasta que niri los implemente.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Picture-in-picture de Chrome. El título es "Picture in picture" (Chrome),
+// distinto del "Picture-in-Picture" de Firefox que ya cubre config.kdl.
+// El regex acepta ambas grafías por si cambia entre versiones.
+window-rule {
+    match app-id=r#"^google-chrome$"# title=r#"^Picture[- ]in[- ][Pp]icture$"#
+
+    open-floating true
+
+    // Que no robe el foco al abrirse: se lanza mientras se está leyendo o
+    // escribiendo en otra ventana.
+    open-focused false
+
+    // El PiP es opaco de punta a punta. Con blur detrás, niri paga los 3 pases
+    // de kawase cada frame para dibujar algo que la ventana tapa entera.
+    background-effect {
+        blur false
+    }
+
+    // Sombra suave en vez de la de is-floating (softness 60): el PiP es
+    // pequeño y esa sombra lo rodea de un halo desproporcionado.
+    shadow {
+        on
+        softness 24
+        spread 0
+        offset x=0 y=8
+        color "#00000099"
+    }
+}
+
+// Document Picture-in-Picture (la API nueva: YouTube, Meet, Spotify Web).
+// Aquí el título lo pone la web, así que no sirve como filtro. Estas ventanas
+// las abre Chrome con app-id propio derivado del origen.
+window-rule {
+    match app-id=r#"^chrome-.*-Default$"# is-floating=true
+    background-effect {
+        blur false
+    }
+}
+
+// PWAs instaladas (Chrome --app / "Instalar aplicación"). Son la vía por la que
+// una web se comporta como app nativa en niri: entrada .desktop propia, icono
+// propio en el dock de DMS y app-id estable para reglas.
+window-rule {
+    match app-id=r#"^chrome-.*-Default$"#
+
+    // Sin blur: son opacas, mismo razonamiento que el PiP.
+    background-effect {
+        blur false
+    }
+}
+
+// Ventana normal de Chrome. Opacidad explícita a 1.0: si alguna regla futura
+// baja la opacidad global, el vídeo se mezclaría con el fondo y perdería
+// contraste y negros.
+window-rule {
+    match app-id=r#"^google-chrome$"#
+    opacity 1.0
+}

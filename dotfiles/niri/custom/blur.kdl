@@ -1,0 +1,60 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Blur de fondo (niri 26.04, dual kawase + protocolo ext-background-effect-v1).
+//
+// Dos vías, y conviene no confundirlas:
+//   1. La aplicación lo pide sola por el protocolo. Es lo que hacen los paneles
+//      de DankMaterialShell — `dms blur check` responde "supported" y
+//      blurEnabled ya está en true en settings.json. La barra, el dock y los
+//      popups no necesitan ninguna regla aquí.
+//   2. niri lo aplica por regla, con `background-effect { blur true }`. Es lo
+//      que se usa abajo para ventanas normales que no saben pedirlo.
+//
+// En ambos casos la ventana tiene que ser semitransparente: el blur va DETRÁS.
+// Una ventana opaca lo tapa entero.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Parámetros globales. Afectan a todo el blur, venga de donde venga.
+// Los de fábrica son passes=3 offset=3 noise=0.02 saturation=1.5.
+blur {
+    // `off` aquí mataría el blur también el que piden DMS y las apps.
+
+    // offset es gratis en GPU: se sube primero hasta que aparecen artefactos, y
+    // sólo entonces se sube passes. Con 3 pases, 5 aguanta sin romperse en esta
+    // Intel UHD (Raptor Lake) y da un radio ancho, tipo macOS.
+    passes 3
+    offset 5
+
+    // macOS satura el fondo difuminado — es lo que hace que el "vidrio" tenga
+    // color en vez de verse gris sucio.
+    saturation 1.7
+
+    // Ruido contra el banding de los degradados del wallpaper.
+    noise 0.03
+}
+
+// Nota sobre xray: cuando hay algún efecto activo, niri activa xray por defecto.
+// Con xray el blur ve sólo el wallpaper, ignorando las ventanas de debajo — se
+// calcula una vez y se reutiliza, que es barato. `xray false` da el blur real
+// de macOS (difumina lo que haya debajo), pero el propio wiki lo marca como
+// experimental: desaparece durante las animaciones de abrir/cerrar y al
+// arrastrar una ventana embaldosada, y recalcula cada frame. En una iGPU no
+// compensa. Se deja el xray por defecto.
+
+// Terminal. Ptyxis pone su opacidad por perfil (gsettings, clave `opacity`),
+// no con `opacity` de niri: así el texto queda opaco sobre un fondo translúcido
+// en vez de difuminarse la ventana entera, letras incluidas.
+window-rule {
+    match app-id=r#"^org\.gnome\.Ptyxis$"#
+    background-effect {
+        blur true
+    }
+}
+
+// Ventanas flotantes: son las que más se benefician, porque cuelgan sobre otras
+// y el fondo difuminado las despega del contenido de abajo.
+window-rule {
+    match is-floating=true
+    background-effect {
+        blur true
+    }
+}

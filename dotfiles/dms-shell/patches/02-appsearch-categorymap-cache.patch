@@ -1,0 +1,45 @@
+--- a/Services/AppSearchService.qml
++++ b/Services/AppSearchService.qml
+@@ -759,11 +759,22 @@
+         return results;
+     }
+ 
+-    function getCategoriesForApp(app) {
+-        if (!app?.categories)
+-            return [];
++    // Built once per locale instead of per app: each I18n.tr() miss walks every
++    // context bucket in the locale table, so rebuilding this map for all ~120
++    // desktop entries cost ~900 ms on the first launcher open.
++    property var _categoryMap: null
+ 
+-        const categoryMap = {
++    Connections {
++        target: I18n
++        function onLocaleApplied() {
++            root._categoryMap = null;
++            root._cachedCategories = null;
++            root.invalidateLauncherCache();
++        }
++    }
++
++    function _buildCategoryMap() {
++        _categoryMap = {
+             "AudioVideo": I18n.tr("Media"),
+             "Audio": I18n.tr("Media"),
+             "Video": I18n.tr("Media"),
+@@ -789,6 +800,15 @@
+             "FileManager": I18n.tr("Utilities"),
+             "TerminalEmulator": I18n.tr("Utilities")
+         };
++    }
++
++    function getCategoriesForApp(app) {
++        if (!app?.categories)
++            return [];
++
++        if (!_categoryMap)
++            _buildCategoryMap();
++        const categoryMap = _categoryMap;
+ 
+         const mappedCategories = new Set();
+ 

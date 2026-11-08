@@ -1,0 +1,107 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// ! GENERADO por matugen desde ~/.config/matugen/templates/niri-futurista.kdl !
+// ! No editar ~/.config/niri/custom/futurista.kdl: se reescribe con cada tema. !
+//
+// Diseño futurista (2026-09-28): tubo de neón en la ventana activa, contorno
+// HUD en las inactivas y halo en vez de sombra. Sin animaciones propias.
+//
+// Los colores salen del tema de DMS. DMS ejecuta las plantillas de
+// ~/.config/matugen/config.toml cada vez que regenera el tema
+// (runUserMatugenTemplates), así que el neón sigue al wallpaper igual que
+// dms/colors.kdl. El primary de Material You es un pastel (L 83 % con el
+// wallpaper nevado); `set_lightness` lo baja al 65 % sin tocar el tono, que
+// es lo que lo convierte en neón.
+//
+// Para volver al aspecto anterior (sombra caída, anillo del tema) basta con
+// comentar `include "custom/futurista.kdl"` en config.kdl. Nada de lo de
+// abajo toca los demás archivos.
+// ─────────────────────────────────────────────────────────────────────────────
+
+layout {
+    // Tubo de neón: núcleo casi blanco de 1 px (border) dentro de un anillo
+    // de color de 2 px (focus-ring) y un halo del mismo tono (shadow).
+    // relative-to="workspace-view": el degradado es uno solo a lo ancho de la
+    // pantalla, así que al mover el foco el color cambia según dónde esté la
+    // ventana, en vez de repetirse igual en cada una.
+    focus-ring {
+        on
+        width 2
+        active-gradient from="{{colors.primary.default.hex | set_lightness: 65.0}}" to="{{colors.tertiary.default.hex | set_lightness: 68.0}}" angle=135 relative-to="workspace-view" in="oklch shorter hue"
+        inactive-gradient from="{{colors.primary.default.hex | set_lightness: 65.0}}66" to="{{colors.tertiary.default.hex | set_lightness: 68.0}}66" angle=135 relative-to="workspace-view" in="oklch shorter hue"
+        urgent-gradient from="{{colors.error.default.hex | set_lightness: 62.0}}" to="{{colors.tertiary.default.hex | set_lightness: 68.0}}" angle=135 relative-to="workspace-view" in="oklch shorter hue"
+    }
+
+    // Contorno HUD en todas las ventanas: 1 px del mismo degradado, tenue en
+    // las inactivas. En la activa es el núcleo blanco del tubo.
+    border {
+        on
+        width 1
+        active-color "{{colors.primary.default.hex | set_lightness: 92.0}}"
+        inactive-gradient from="{{colors.primary.default.hex | set_lightness: 65.0}}4d" to="{{colors.tertiary.default.hex | set_lightness: 68.0}}4d" angle=135 relative-to="workspace-view" in="oklch shorter hue"
+        urgent-color "{{colors.error.default.hex | set_lightness: 62.0}}"
+    }
+
+    // Halo en lugar de sombra: sin caída vertical, centrado en la ventana.
+    // Forma común a activas e inactivas (niri solo deja variar el color): en
+    // la activa brilla con el neón; en las inactivas queda un velo oscuro que
+    // las hunde un poco.
+    shadow {
+        on
+        softness 28
+        spread 2
+        offset x=0 y=0
+        color "{{colors.primary.default.hex | set_lightness: 65.0}}73"
+        inactive-color "#00000059"
+    }
+
+    insert-hint {
+        gradient from="{{colors.primary.default.hex | set_lightness: 65.0}}80" to="{{colors.tertiary.default.hex | set_lightness: 68.0}}80" angle=135 relative-to="workspace-view" in="oklch shorter hue"
+    }
+
+    tab-indicator {
+        active-gradient from="{{colors.primary.default.hex | set_lightness: 65.0}}" to="{{colors.tertiary.default.hex | set_lightness: 68.0}}" angle=90 in="oklch shorter hue"
+        inactive-color "{{colors.primary.default.hex | set_lightness: 65.0}}4d"
+    }
+}
+
+// Overview: espacio profundo (el surface más bajo del tema, casi negro con
+// el tinte del wallpaper) y cada workspace flotando con un resplandor neón.
+overview {
+    backdrop-color "{{colors.surface_container_lowest.dark.hex}}"
+
+    workspace-shadow {
+        softness 60
+        spread 6
+        offset x=0 y=0
+        color "{{colors.primary.default.hex | set_lightness: 65.0}}40"
+    }
+}
+
+// Alt+Tab: la miniatura elegida se resalta con el neón.
+recent-windows {
+    highlight {
+        active-color "{{colors.primary.default.hex | set_lightness: 65.0}}99"
+        urgent-color "{{colors.error.default.hex | set_lightness: 62.0}}"
+    }
+}
+
+// Las flotantes llevaban su propia sombra negra caída (config.kdl, softness
+// 60, y=20), que taparía el halo. Se igualan al resto. El PiP de Chrome queda
+// fuera: chrome.kdl le da una sombra pequeña a propósito.
+window-rule {
+    match is-floating=true
+    exclude app-id=r#"^google-chrome$"# title=r#"^Picture[- ]in[- ][Pp]icture$"#
+    shadow {
+        on
+        softness 28
+        spread 2
+        offset x=0 y=0
+        color "{{colors.primary.default.hex | set_lightness: 65.0}}73"
+        inactive-color "#00000059"
+    }
+}
+
+// Las animaciones de holograma (barrido de neón al abrir, apagado de CRT
+// al cerrar) se quitaron el 2026-10-09: las animaciones vuelven a ser las
+// de estilo macOS de custom/animaciones.kdl. Siguen en
+// ~/.config/matugen/templates/niri-futurista.kdl.bak-macos-1791593065.
