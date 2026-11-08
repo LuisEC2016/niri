@@ -361,25 +361,9 @@ window-rule {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Workspace almacén para "minimizar".
-// niri no tiene minimizar: scripts/niri-minimize.sh aparca la ventana en un
-// workspace llamado "min" y luego la devuelve a su workspace de origen.
-// NO se declara aquí con `workspace "min"`: niri pone los workspaces con
-// nombre los primeros, así que "min" ocupaba el 1 y la sesión arrancaba en el
-// 2 (y Mod+1 llevaba al almacén). El script lo crea al final del monitor al
-// minimizar y le quita el nombre cuando se vacía.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Sin spawn-at-startup: este config no arranca ningún proceso al iniciar.
 // Lo que antes se lanzaba aquí ahora arranca solo cuando hace falta, o donde
 // hace falta:
-//
-// - Vigilante de minimizar (scripts/niri-minimize-watch.sh): si una ventana
-//   minimizada recibe el foco (dock de DMS, Alt+Tab) la devuelve a su
-//   workspace de origen. Lo lanza niri-minimize.sh al minimizar y termina
-//   cuando ya no queda ninguna minimizada; antes eran ~20 MB residentes toda
-//   la sesión y tres forks por cada cambio de foco.
 //
 // - Saneo de audio (scripts/audio-init.sh): corrige el perfil de la tarjeta si
 //   WirePlumber restaura uno sin salida conectada y fija altavoz + micrófono
@@ -684,14 +668,17 @@ binds {
 
     // While maximize-column leaves gaps and borders around the window,
     // maximize-window-to-edges doesn't: the window expands to the edges of the screen.
-    // This bind corresponds to normal window maximizing,
-    // e.g. by double-clicking on the titlebar.
-    Mod+M { maximize-window-to-edges; }
+    // Alterna maximizado/restaurado igual que el botón o el doble clic en la
+    // barra de título. Una ventana flotante se maximiza en su sitio (sigue
+    // flotante) y al restaurar vuelve a su posición y tamaño.
+    Mod+M hotkey-overlay-title="Maximizar / restaurar ventana" { maximize-window-to-edges; }
 
-    // Minimizar / restaurar (emulado con el workspace "min").
-    Mod+Shift+M hotkey-overlay-title="Minimizar ventana" { spawn "sh" "-c" "~/.config/niri/scripts/niri-minimize.sh minimize"; }
-    Mod+Ctrl+M  hotkey-overlay-title="Restaurar última minimizada" { spawn "sh" "-c" "~/.config/niri/scripts/niri-minimize.sh restore"; }
-    Mod+Alt+M   hotkey-overlay-title="Elegir ventana minimizada" { spawn "sh" "-c" "~/.config/niri/scripts/niri-minimize.sh pick"; }
+    // Minimizar / restaurar (nativo). La ventana sale del layout sin ocupar
+    // espacio y vuelve a su sitio exacto: mismo workspace, columna y posición.
+    // Enfocarla (dock, Alt+Tab, focus-window) también la restaura.
+    Mod+Shift+M hotkey-overlay-title="Minimizar ventana" { minimize-window; }
+    Mod+Ctrl+M  hotkey-overlay-title="Restaurar última minimizada" { unminimize-window; }
+    Mod+Alt+M   hotkey-overlay-title="Elegir ventana minimizada" { spawn "sh" "-c" "~/.config/niri/scripts/niri-minimized-menu.sh"; }
 
     // Expand the focused column to space not taken up by other fully visible columns.
     // Makes the column "fill the rest of the space".

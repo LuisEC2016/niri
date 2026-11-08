@@ -1075,6 +1075,30 @@ impl State {
                     mapped.toplevel().send_close();
                 }
             }
+            Action::MinimizeWindow => {
+                let focus = self.niri.layout.focus().map(|m| m.window.clone());
+                if let Some(window) = focus {
+                    self.minimize_window(&window);
+                }
+            }
+            Action::MinimizeWindowById(id) => {
+                let id = MappedId::specific(id);
+                if let Some(window) = self.niri.find_window_by_id(id) {
+                    self.minimize_window(&window);
+                }
+            }
+            Action::UnminimizeWindow => {
+                let last = self.niri.layout.last_minimized_window();
+                if let Some(window) = last.map(|m| m.window.clone()) {
+                    self.unminimize_window(&window, true);
+                }
+            }
+            Action::UnminimizeWindowById(id) => {
+                let id = MappedId::specific(id);
+                if let Some(window) = self.niri.find_window_by_id(id) {
+                    self.unminimize_window(&window, true);
+                }
+            }
             Action::FullscreenWindow => {
                 let focus = self.niri.layout.focus().map(|m| m.window.clone());
                 if let Some(window) = focus {

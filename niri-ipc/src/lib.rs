@@ -306,6 +306,31 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
+    /// Minimize a window.
+    ///
+    /// The window leaves the layout until it is restored: it isn't shown, can't be focused and
+    /// takes no space. It stays on its workspace and remembers its place there. Focusing it (for
+    /// example with focus-window or from a taskbar) restores it.
+    #[cfg_attr(feature = "clap", clap(about = "Minimize the focused window"))]
+    MinimizeWindow {
+        /// Id of the window to minimize.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Restore a minimized window to its place and focus it.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Restore the most recently minimized window")
+    )]
+    UnminimizeWindow {
+        /// Id of the window to restore.
+        ///
+        /// If `None`, restores the most recently minimized window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
     /// Toggle fullscreen on a window.
     #[cfg_attr(
         feature = "clap",
@@ -1450,6 +1475,12 @@ pub struct Window {
     pub is_floating: bool,
     /// Whether this window requests your attention.
     pub is_urgent: bool,
+    /// Whether this window is minimized.
+    ///
+    /// A minimized window is hidden until it is restored. It keeps its `workspace_id` and
+    /// `is_floating`, which say where it will return to.
+    #[serde(default)]
+    pub is_minimized: bool,
     /// Position- and size-related properties of the window.
     pub layout: WindowLayout,
     /// Timestamp when the window was most recently focused.

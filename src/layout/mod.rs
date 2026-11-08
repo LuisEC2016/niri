@@ -241,6 +241,9 @@ pub trait LayoutElement {
     fn set_activated(&mut self, active: bool);
     fn set_active_in_column(&mut self, active: bool);
     fn set_floating(&mut self, floating: bool);
+    /// Marks the element as minimized: hidden from the layout until it is restored.
+    fn set_minimized(&mut self, minimized: bool);
+    fn is_minimized(&self) -> bool;
     fn set_bounds(&self, bounds: Size<i32, Logical>);
     fn is_ignoring_opacity_window_rule(&self) -> bool;
 
@@ -983,6 +986,16 @@ impl<W: LayoutElement> Layout<W> {
         let scrolling_height = height.map(SizeChange::from);
         let id = window.id().clone();
 
+        // A window opening next to a minimized one (a dialog of a minimized app) goes to the
+        // minimized window's workspace, without restoring it.
+        let target = match target {
+            AddWindowTarget::NextTo(next_to) => self
+                .workspaces()
+                .find(|(_, _, ws)| ws.is_minimized(next_to))
+                .map_or(target, |(_, _, ws)| AddWindowTarget::Workspace(ws.id())),
+            target => target,
+        };
+
         match &mut self.monitor_set {
             MonitorSet::Normal {
                 monitors,
@@ -1196,7 +1209,7 @@ impl<W: LayoutElement> Layout<W> {
             MonitorSet::Normal { monitors, .. } => {
                 for mon in monitors {
                     for (idx, ws) in mon.workspaces.iter_mut().enumerate() {
-                        if ws.has_window(window) {
+                        if ws.contains_window(window) {
                             let removed = ws.remove_tile(window, transaction);
 
                             // Clean up empty workspaces that are not active and not last.
@@ -1230,7 +1243,7 @@ impl<W: LayoutElement> Layout<W> {
             }
             MonitorSet::NoOutputs { workspaces, .. } => {
                 for (idx, ws) in workspaces.iter_mut().enumerate() {
-                    if ws.has_window(window) {
+                    if ws.contains_window(window) {
                         let removed = ws.remove_tile(window, transaction);
 
                         // Clean up empty workspaces.
@@ -1245,6 +1258,55 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         None
+    }
+
+    /// Minimizes a window: hides it from the layout, keeping it on its workspace.
+    ///
+    /// Returns `false` if the window can't be minimized (it isn't laid out, e.g. it's already
+    /// minimized or being interactively moved).
+    pub fn minimize_window(&mut self, window: &W::Id, transaction: Transaction) -> bool {
+        match &self.interactive_move {
+            Some(InteractiveMoveState::Moving(move_)) if move_.tile.window().id() == window => {
+                return false;
+            }
+            Some(InteractiveMoveState::Starting { window_id, .. }) if window_id == window => {
+                self.interactive_move_end(window);
+            }
+            _ => (),
+        }
+
+        self.workspaces_mut()
+            .any(|ws| ws.minimize_window(window, transaction.clone()))
+    }
+
+    /// Puts a minimized window back where it was.
+    ///
+    /// With `activate` it also focuses the window, switching to its workspace and output.
+    /// Returns `false` if the window isn't minimized.
+    pub fn unminimize_window(&mut self, window: &W::Id, activate: bool) -> bool {
+        // Restore first: activate_window() does nothing without outputs, and the window must come
+        // back regardless.
+        let restored = self
+            .workspaces_mut()
+            .any(|ws| ws.unminimize_window(window, false));
+
+        if restored && activate {
+            self.activate_window(window);
+        }
+
+        restored
+    }
+
+    pub fn is_minimized(&self, window: &W::Id) -> bool {
+        self.workspaces().any(|(_, _, ws)| ws.is_minimized(window))
+    }
+
+    /// The window minimized most recently that is still minimized.
+    pub fn last_minimized_window(&self) -> Option<&W> {
+        self.workspaces()
+            .flat_map(|(_, _, ws)| ws.minimized_windows())
+            .max_by_key(|(_, serial)| *serial)
+            .map(|(win, _)| win)
     }
 
     pub fn descendants_added(&mut self, id: &W::Id) -> bool {
@@ -1274,7 +1336,7 @@ impl<W: LayoutElement> Layout<W> {
             MonitorSet::Normal { monitors, .. } => {
                 for mon in monitors {
                     for ws in &mut mon.workspaces {
-                        if ws.has_window(window) {
+                        if ws.contains_window(window) {
                             ws.update_window(window, serial);
                             return;
                         }
@@ -1283,7 +1345,7 @@ impl<W: LayoutElement> Layout<W> {
             }
             MonitorSet::NoOutputs { workspaces, .. } => {
                 for ws in workspaces {
-                    if ws.has_window(window) {
+                    if ws.contains_window(window) {
                         ws.update_window(window, serial);
                         return;
                     }
@@ -1547,15 +1609,15 @@ impl<W: LayoutElement> Layout<W> {
             return true;
         };
 
-        let (mon, ws_idx) = monitors
-            .iter()
-            .find_map(|mon| {
-                mon.workspaces
-                    .iter()
-                    .position(|ws| ws.has_window(window))
-                    .map(|ws_idx| (mon, ws_idx))
-            })
-            .unwrap();
+        // Minimized windows are not under the pointer.
+        let Some((mon, ws_idx)) = monitors.iter().find_map(|mon| {
+            mon.workspaces
+                .iter()
+                .position(|ws| ws.has_window(window))
+                .map(|ws_idx| (mon, ws_idx))
+        }) else {
+            return false;
+        };
 
         // During a gesture, focus-follows-mouse does not cause any unintended workspace switches.
         if let Some(WorkspaceSwitch::Gesture(_)) = mon.workspace_switch {
@@ -1964,11 +2026,8 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let workspace = if let Some(window) = window {
-            Some(
-                self.workspaces_mut()
-                    .find(|ws| ws.has_window(window))
-                    .unwrap(),
-            )
+            // None when the window is minimized: only laid out windows can be targeted.
+            self.workspaces_mut().find(|ws| ws.has_window(window))
         } else {
             self.active_workspace_mut()
         };
@@ -1987,11 +2046,8 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let workspace = if let Some(window) = window {
-            Some(
-                self.workspaces_mut()
-                    .find(|ws| ws.has_window(window))
-                    .unwrap(),
-            )
+            // None when the window is minimized: only laid out windows can be targeted.
+            self.workspaces_mut().find(|ws| ws.has_window(window))
         } else {
             self.active_workspace_mut()
         };
@@ -2224,10 +2280,13 @@ impl<W: LayoutElement> Layout<W> {
 
         let monitor = if let Some(window) = window {
             match &mut self.monitor_set {
-                MonitorSet::Normal { monitors, .. } => monitors
-                    .iter_mut()
-                    .find(|mon| mon.has_window(window))
-                    .unwrap(),
+                MonitorSet::Normal { monitors, .. } => {
+                    // Minimized windows can't be moved.
+                    let Some(mon) = monitors.iter_mut().find(|mon| mon.has_window(window)) else {
+                        return;
+                    };
+                    mon
+                }
                 MonitorSet::NoOutputs { .. } => {
                     return;
                 }
@@ -2347,7 +2406,8 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let workspace = if let Some(id) = id {
-            Some(self.workspaces_mut().find(|ws| ws.has_window(id)).unwrap())
+            // None when the window is minimized: only laid out windows can be targeted.
+            self.workspaces_mut().find(|ws| ws.has_window(id))
         } else {
             self.active_workspace_mut()
         };
@@ -3076,11 +3136,8 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let workspace = if let Some(window) = window {
-            Some(
-                self.workspaces_mut()
-                    .find(|ws| ws.has_window(window))
-                    .unwrap(),
-            )
+            // None when the window is minimized: only laid out windows can be targeted.
+            self.workspaces_mut().find(|ws| ws.has_window(window))
         } else {
             self.active_workspace_mut()
         };
@@ -3099,11 +3156,8 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let workspace = if let Some(window) = window {
-            Some(
-                self.workspaces_mut()
-                    .find(|ws| ws.has_window(window))
-                    .unwrap(),
-            )
+            // None when the window is minimized: only laid out windows can be targeted.
+            self.workspaces_mut().find(|ws| ws.has_window(window))
         } else {
             self.active_workspace_mut()
         };
@@ -3136,11 +3190,8 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let workspace = if let Some(window) = window {
-            Some(
-                self.workspaces_mut()
-                    .find(|ws| ws.has_window(window))
-                    .unwrap(),
-            )
+            // None when the window is minimized: only laid out windows can be targeted.
+            self.workspaces_mut().find(|ws| ws.has_window(window))
         } else {
             self.active_workspace_mut()
         };
@@ -3159,11 +3210,8 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let workspace = if let Some(window) = window {
-            Some(
-                self.workspaces_mut()
-                    .find(|ws| ws.has_window(window))
-                    .unwrap(),
-            )
+            // None when the window is minimized: only laid out windows can be targeted.
+            self.workspaces_mut().find(|ws| ws.has_window(window))
         } else {
             self.active_workspace_mut()
         };
@@ -3182,11 +3230,8 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let workspace = if let Some(window) = window {
-            Some(
-                self.workspaces_mut()
-                    .find(|ws| ws.has_window(window))
-                    .unwrap(),
-            )
+            // None when the window is minimized: only laid out windows can be targeted.
+            self.workspaces_mut().find(|ws| ws.has_window(window))
         } else {
             self.active_workspace_mut()
         };
@@ -3252,11 +3297,8 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let workspace = if let Some(window) = window {
-            Some(
-                self.workspaces_mut()
-                    .find(|ws| ws.has_window(window))
-                    .unwrap(),
-            )
+            // None when the window is minimized: only laid out windows can be targeted.
+            self.workspaces_mut().find(|ws| ws.has_window(window))
         } else {
             self.active_workspace_mut()
         };
@@ -3278,11 +3320,8 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let workspace = if let Some(window) = window {
-            Some(
-                self.workspaces_mut()
-                    .find(|ws| ws.has_window(window))
-                    .unwrap(),
-            )
+            // None when the window is minimized: only laid out windows can be targeted.
+            self.workspaces_mut().find(|ws| ws.has_window(window))
         } else {
             self.active_workspace_mut()
         };
@@ -3328,7 +3367,8 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let workspace = if let Some(id) = id {
-            Some(self.workspaces_mut().find(|ws| ws.has_window(id)).unwrap())
+            // None when the window is minimized: only laid out windows can be targeted.
+            self.workspaces_mut().find(|ws| ws.has_window(id))
         } else {
             self.active_workspace_mut()
         };
@@ -3380,16 +3420,16 @@ impl<W: LayoutElement> Layout<W> {
                 .unwrap();
 
             let (mon_idx, ws_idx) = if let Some(window) = window {
-                monitors
-                    .iter()
-                    .enumerate()
-                    .find_map(|(mon_idx, mon)| {
-                        mon.workspaces
-                            .iter()
-                            .position(|ws| ws.has_window(window))
-                            .map(|ws_idx| (mon_idx, ws_idx))
-                    })
-                    .unwrap()
+                // Minimized windows can't be moved.
+                let Some(found) = monitors.iter().enumerate().find_map(|(mon_idx, mon)| {
+                    mon.workspaces
+                        .iter()
+                        .position(|ws| ws.has_window(window))
+                        .map(|ws_idx| (mon_idx, ws_idx))
+                }) else {
+                    return;
+                };
+                found
             } else {
                 let mon_idx = *active_monitor_idx;
                 let mon = &monitors[mon_idx];

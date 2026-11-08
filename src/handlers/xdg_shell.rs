@@ -1,5 +1,4 @@
 use std::cell::Cell;
-use std::time::Duration;
 
 use calloop::Interest;
 use niri_config::PresetSize;
@@ -41,8 +40,7 @@ use crate::input::move_grab::MoveGrab;
 use crate::input::resize_grab::ResizeGrab;
 use crate::input::{AnyStartData, DOUBLE_CLICK_TIME};
 use crate::layout::ActivateWindow;
-use crate::niri::{CastTarget, ClientState, PopupGrabState, State};
-use crate::utils::spawning::spawn_sh;
+use crate::niri::{CastTarget, PopupGrabState, State};
 use crate::utils::transaction::Transaction;
 use crate::utils::{
     get_monotonic_time, output_matches_name, send_scale_transform, update_tiled_state, ResizeEdge,
@@ -465,18 +463,9 @@ impl XdgShellHandler for State {
         });
     }
 
-    // niri upstream leaves minimize_request unimplemented, so the minimize button that
-    // client-side decorations draw does nothing. Hand the request off to the user's
-    // minimize helper, which parks the window on the "min" workspace and remembers where
-    // it came from, so the button behaves like minimize does everywhere else.
+    // The minimize button drawn by client-side decorations. xdg-shell has no minimized state
+    // to report back, so the client only sees its window lose the activated state.
     fn minimize_request(&mut self, toplevel: ToplevelSurface) {
-        // Any client can send set_minimized as often as it likes, sandboxed ones included,
-        // and every request would start a shell plus a handful of `niri msg` processes on the
-        // host. Nobody clicks minimize faster than this, so drop anything in between. The limit
-        // is per client: a global one would let one client flooding requests swallow every
-        // other client's minimize button.
-        const MIN_INTERVAL: Duration = Duration::from_millis(250);
-
         let Some((mapped, _)) = self
             .niri
             .layout
@@ -485,26 +474,8 @@ impl XdgShellHandler for State {
             return;
         };
 
-        let Some(client) = toplevel.wl_surface().client() else {
-            return;
-        };
-        let Some(data) = client.get_data::<ClientState>() else {
-            return;
-        };
-        let now = get_monotonic_time();
-        {
-            let mut last = data.last_minimize_spawn.lock().unwrap();
-            if last.is_some_and(|last| now.saturating_sub(last) < MIN_INTERVAL) {
-                return;
-            }
-            *last = Some(now);
-        }
-
-        let id = mapped.id().get();
-        spawn_sh(
-            format!("exec \"$HOME\"/.config/niri/scripts/niri-minimize.sh minimize-id {id}"),
-            None,
-        );
+        let window = mapped.window.clone();
+        self.minimize_window(&window);
     }
 
     fn maximize_request(&mut self, toplevel: ToplevelSurface) {

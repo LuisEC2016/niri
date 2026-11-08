@@ -35,6 +35,7 @@ struct TestWindowInner {
     max_size: Size<i32, Logical>,
     pending_sizing_mode: Cell<SizingMode>,
     pending_activated: Cell<bool>,
+    is_minimized: Cell<bool>,
     sizing_mode: Cell<SizingMode>,
     is_windowed_fullscreen: Cell<bool>,
     is_pending_windowed_fullscreen: Cell<bool>,
@@ -87,6 +88,7 @@ impl TestWindow {
             max_size: params.min_max_size.1,
             pending_sizing_mode: Cell::new(SizingMode::Normal),
             pending_activated: Cell::new(false),
+            is_minimized: Cell::new(false),
             sizing_mode: Cell::new(SizingMode::Normal),
             is_windowed_fullscreen: Cell::new(false),
             is_pending_windowed_fullscreen: Cell::new(false),
@@ -230,6 +232,14 @@ impl LayoutElement for TestWindow {
     fn set_active_in_column(&mut self, _active: bool) {}
 
     fn set_floating(&mut self, _floating: bool) {}
+
+    fn set_minimized(&mut self, minimized: bool) {
+        self.0.is_minimized.set(minimized);
+    }
+
+    fn is_minimized(&self) -> bool {
+        self.0.is_minimized.get()
+    }
 
     fn sizing_mode(&self) -> SizingMode {
         self.0.sizing_mode.get()
@@ -455,6 +465,12 @@ enum Op {
         ws_name: usize,
     },
     CloseWindow(#[proptest(strategy = "1..=5usize")] usize),
+    MinimizeWindow(#[proptest(strategy = "1..=5usize")] usize),
+    UnminimizeWindow {
+        #[proptest(strategy = "1..=5usize")]
+        id: usize,
+        activate: bool,
+    },
     FullscreenWindow(#[proptest(strategy = "1..=5usize")] usize),
     SetFullscreenWindow {
         #[proptest(strategy = "1..=5usize")]
@@ -1063,6 +1079,12 @@ impl Op {
             }
             Op::CloseWindow(id) => {
                 layout.remove_window(&id, Transaction::new());
+            }
+            Op::MinimizeWindow(id) => {
+                layout.minimize_window(&id, Transaction::new());
+            }
+            Op::UnminimizeWindow { id, activate } => {
+                layout.unminimize_window(&id, activate);
             }
             Op::FullscreenWindow(id) => {
                 if !layout.has_window(&id) {
@@ -1816,6 +1838,16 @@ fn operations_dont_panic() {
         Op::FullscreenWindow(1),
         Op::FullscreenWindow(2),
         Op::FullscreenWindow(3),
+        Op::MinimizeWindow(1),
+        Op::MinimizeWindow(2),
+        Op::UnminimizeWindow {
+            id: 1,
+            activate: true,
+        },
+        Op::UnminimizeWindow {
+            id: 2,
+            activate: false,
+        },
         Op::MaximizeWindowToEdges { id: Some(1) },
         Op::MaximizeWindowToEdges { id: Some(2) },
         Op::MaximizeWindowToEdges { id: Some(3) },
@@ -1974,6 +2006,16 @@ fn operations_from_starting_state_dont_panic() {
         Op::FullscreenWindow(1),
         Op::FullscreenWindow(2),
         Op::FullscreenWindow(3),
+        Op::MinimizeWindow(1),
+        Op::MinimizeWindow(2),
+        Op::UnminimizeWindow {
+            id: 1,
+            activate: true,
+        },
+        Op::UnminimizeWindow {
+            id: 2,
+            activate: false,
+        },
         Op::MaximizeWindowToEdges { id: Some(1) },
         Op::MaximizeWindowToEdges { id: Some(2) },
         Op::MaximizeWindowToEdges { id: Some(3) },
@@ -3670,6 +3712,466 @@ fn restore_to_floating_persists_across_fullscreen_maximize() {
     // Unmaximize should return the window back to floating.
     let scrolling = layout.active_workspace().unwrap().scrolling();
     assert!(scrolling.tiles().next().is_none());
+}
+
+fn scrolling_ids(layout: &Layout<TestWindow>) -> Vec<Vec<usize>> {
+    layout
+        .active_workspace()
+        .unwrap()
+        .scrolling()
+        .columns()
+        .map(|col| col.tiles().map(|(tile, _)| *tile.window().id()).collect())
+        .collect()
+}
+
+fn focused_id(layout: &Layout<TestWindow>) -> Option<usize> {
+    layout.focus().map(|win| *win.id())
+}
+
+#[test]
+fn minimize_restores_column_position() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::FocusColumnLeft,
+        Op::MinimizeWindow(2),
+    ];
+    let mut layout = check_ops(ops);
+
+    assert_eq!(scrolling_ids(&layout), [vec![1], vec![3]]);
+    assert!(layout.is_minimized(&2));
+    assert_ne!(focused_id(&layout), Some(2));
+    // Still a window of the layout for IPC and foreign toplevel, just not laid out.
+    assert!(layout.has_window(&2));
+    assert!(layout
+        .windows()
+        .any(|(_, win)| *win.id() == 2 && win.is_minimized()));
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::UnminimizeWindow {
+            id: 2,
+            activate: true,
+        }],
+    );
+    assert_eq!(scrolling_ids(&layout), [vec![1], vec![2], vec![3]]);
+    assert_eq!(focused_id(&layout), Some(2));
+    assert!(!layout.is_minimized(&2));
+}
+
+#[test]
+fn minimize_restores_into_shared_column() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::ConsumeOrExpelWindowLeft { id: None },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::MinimizeWindow(2),
+    ];
+    let mut layout = check_ops(ops);
+    assert_eq!(scrolling_ids(&layout), [vec![1], vec![3]]);
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::UnminimizeWindow {
+            id: 2,
+            activate: false,
+        }],
+    );
+    assert_eq!(scrolling_ids(&layout), [vec![1, 2], vec![3]]);
+    // Restoring without activating leaves the focus alone.
+    assert_eq!(focused_id(&layout), Some(3));
+}
+
+#[test]
+fn minimize_restores_floating_position() {
+    let mut params = TestWindowParams::new(1);
+    params.is_floating = true;
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow { params },
+        Op::Communicate(1),
+        Op::MoveFloatingWindow {
+            id: None,
+            x: PositionChange::SetFixed(123.),
+            y: PositionChange::SetFixed(45.),
+            animate: false,
+        },
+    ];
+    let mut layout = check_ops(ops);
+
+    let floating_pos = |layout: &Layout<TestWindow>| {
+        layout
+            .active_workspace()
+            .unwrap()
+            .floating()
+            .tiles_with_offsets()
+            .find(|(tile, _)| *tile.window().id() == 1)
+            .map(|(_, pos)| pos)
+    };
+    let before = floating_pos(&layout).unwrap();
+
+    check_ops_on_layout(&mut layout, [Op::MinimizeWindow(1)]);
+    assert_eq!(floating_pos(&layout), None);
+    assert_eq!(focused_id(&layout), None);
+
+    check_ops_on_layout(&mut layout, [Op::FocusWindow(1), Op::Communicate(1)]);
+    assert_eq!(floating_pos(&layout), Some(before));
+    assert_eq!(focused_id(&layout), Some(1));
+}
+
+#[test]
+fn minimized_window_keeps_workspace_until_closed() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::MinimizeWindow(1),
+        Op::FocusWorkspaceDown,
+        Op::CompleteAnimations,
+    ];
+    let mut layout = check_ops(ops);
+    // The workspace holding the minimized window plus the empty one at the end.
+    assert_eq!(layout.workspaces().count(), 2);
+
+    check_ops_on_layout(&mut layout, [Op::CloseWindow(1)]);
+    assert!(!layout.has_window(&1));
+    assert_eq!(layout.workspaces().count(), 1);
+}
+
+#[test]
+fn minimized_window_follows_removed_output() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddOutput(2),
+        Op::FocusOutput(2),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::MinimizeWindow(1),
+        Op::RemoveOutput(2),
+        Op::UnminimizeWindow {
+            id: 1,
+            activate: true,
+        },
+    ];
+    let layout = check_ops(ops);
+    assert_eq!(focused_id(&layout), Some(1));
+}
+
+#[test]
+fn unminimize_without_outputs() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::MinimizeWindow(1),
+        Op::RemoveOutput(1),
+        Op::UnminimizeWindow {
+            id: 1,
+            activate: true,
+        },
+    ];
+    let layout = check_ops(ops);
+    assert!(!layout.is_minimized(&1));
+    assert!(layout.has_window(&1));
+}
+
+#[test]
+fn targeted_ops_on_minimized_window_dont_panic() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddOutput(2),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::MinimizeWindow(1),
+        Op::MinimizeWindow(1),
+        Op::SetWindowWidth {
+            id: Some(1),
+            change: SizeChange::SetFixed(500),
+        },
+        Op::SetWindowHeight {
+            id: Some(1),
+            change: SizeChange::SetFixed(500),
+        },
+        Op::ResetWindowHeight { id: Some(1) },
+        Op::SwitchPresetWindowWidth { id: Some(1) },
+        Op::FullscreenWindow(1),
+        Op::MaximizeWindowToEdges { id: Some(1) },
+        Op::ToggleWindowFloating { id: Some(1) },
+        Op::SetWindowFloating {
+            id: Some(1),
+            floating: true,
+        },
+        Op::CenterWindow { id: Some(1) },
+        Op::ConsumeOrExpelWindowLeft { id: Some(1) },
+        Op::ConsumeOrExpelWindowRight { id: Some(1) },
+        Op::MoveFloatingWindow {
+            id: Some(1),
+            x: PositionChange::AdjustFixed(10.),
+            y: PositionChange::AdjustFixed(10.),
+            animate: false,
+        },
+        Op::MoveWindowToWorkspace {
+            window_id: Some(1),
+            workspace_idx: 1,
+        },
+        Op::MoveWindowToOutput {
+            window_id: Some(1),
+            output_id: 2,
+            target_ws_idx: None,
+        },
+        Op::InteractiveMoveBegin {
+            window: 1,
+            output_idx: 1,
+            px: 0.,
+            py: 0.,
+        },
+        Op::InteractiveResizeBegin {
+            window: 1,
+            edges: ResizeEdge::RIGHT,
+        },
+        Op::Communicate(1),
+        Op::Refresh { is_active: true },
+    ];
+    let mut layout = check_ops(ops);
+    assert!(layout.is_minimized(&1));
+    assert_eq!(scrolling_ids(&layout), [vec![2]]);
+
+    // A dialog of the minimized window opens on its workspace without restoring it.
+    let mut params = TestWindowParams::new(3);
+    params.parent_id = Some(1);
+    params.is_floating = true;
+    check_ops_on_layout(
+        &mut layout,
+        [Op::AddWindowNextTo {
+            params,
+            next_to_id: 1,
+        }],
+    );
+    assert!(layout.is_minimized(&1));
+    assert!(layout.has_window(&3));
+}
+
+#[test]
+fn minimize_during_interactive_move_start() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::InteractiveMoveBegin {
+            window: 1,
+            output_idx: 1,
+            px: 0.,
+            py: 0.,
+        },
+        Op::MinimizeWindow(1),
+        Op::InteractiveMoveUpdate {
+            window: 1,
+            dx: 1000.,
+            dy: 0.,
+            output_idx: 1,
+            px: 0.,
+            py: 0.,
+        },
+        Op::InteractiveMoveEnd { window: 1 },
+    ];
+    let layout = check_ops(ops);
+    assert!(layout.is_minimized(&1));
+}
+
+#[test]
+fn last_minimized_window_is_most_recent() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::MinimizeWindow(2),
+        Op::MinimizeWindow(1),
+    ];
+    let mut layout = check_ops(ops);
+    assert_eq!(layout.last_minimized_window().map(|w| *w.id()), Some(1));
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::UnminimizeWindow {
+            id: 1,
+            activate: true,
+        }],
+    );
+    assert_eq!(layout.last_minimized_window().map(|w| *w.id()), Some(2));
+}
+
+fn floating_geometry(layout: &Layout<TestWindow>, id: usize) -> Option<Rectangle<f64, Logical>> {
+    layout
+        .active_workspace()
+        .unwrap()
+        .floating()
+        .tiles_with_offsets()
+        .find(|(tile, _)| *tile.window().id() == id)
+        .map(|(tile, pos)| Rectangle::new(pos, tile.window_size()))
+}
+
+fn floating_window_at(id: usize) -> [Op; 4] {
+    let mut params = TestWindowParams::new(id);
+    params.is_floating = true;
+    [
+        Op::AddWindow { params },
+        Op::Communicate(id),
+        Op::MoveFloatingWindow {
+            id: Some(id),
+            x: PositionChange::SetFixed(123.),
+            y: PositionChange::SetFixed(45.),
+            animate: false,
+        },
+        Op::Communicate(id),
+    ]
+}
+
+#[test]
+fn maximize_floating_window_in_place() {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    check_ops_on_layout(&mut layout, floating_window_at(1));
+    let before = floating_geometry(&layout, 1).unwrap();
+    assert_eq!(before.size, Size::from((100., 200.)));
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MaximizeWindowToEdges { id: None }, Op::Communicate(1)],
+    );
+
+    // Still floating, filling the working area.
+    assert!(scrolling_ids(&layout).is_empty());
+    let maximized = floating_geometry(&layout, 1).unwrap();
+    assert_eq!(maximized, Rectangle::from_size(Size::from((1280., 720.))));
+    assert!(layout.focus().unwrap().sizing_mode().is_maximized());
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MaximizeWindowToEdges { id: None }, Op::Communicate(1)],
+    );
+
+    // Back to the same place and size.
+    assert_eq!(floating_geometry(&layout, 1), Some(before));
+    assert!(layout.focus().unwrap().sizing_mode().is_normal());
+}
+
+#[test]
+fn minimize_maximized_floating_window_restores_maximized() {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    check_ops_on_layout(&mut layout, floating_window_at(1));
+    let before = floating_geometry(&layout, 1).unwrap();
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::MaximizeWindowToEdges { id: None },
+            Op::Communicate(1),
+            Op::MinimizeWindow(1),
+            Op::UnminimizeWindow {
+                id: 1,
+                activate: true,
+            },
+            Op::Communicate(1),
+        ],
+    );
+    assert_eq!(
+        floating_geometry(&layout, 1),
+        Some(Rectangle::from_size(Size::from((1280., 720.))))
+    );
+    assert!(layout.focus().unwrap().sizing_mode().is_maximized());
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MaximizeWindowToEdges { id: None }, Op::Communicate(1)],
+    );
+    assert_eq!(floating_geometry(&layout, 1), Some(before));
+}
+
+#[test]
+fn fullscreen_from_maximized_floating_returns_to_floating() {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    check_ops_on_layout(&mut layout, floating_window_at(1));
+    let before = floating_geometry(&layout, 1).unwrap();
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::MaximizeWindowToEdges { id: None },
+            Op::Communicate(1),
+            Op::FullscreenWindow(1),
+            Op::Communicate(1),
+            // Unfullscreen: back to maximized.
+            Op::FullscreenWindow(1),
+            Op::Communicate(1),
+            // Unmaximize: back to floating, where it was.
+            Op::MaximizeWindowToEdges { id: None },
+            Op::Communicate(1),
+        ],
+    );
+    assert!(scrolling_ids(&layout).is_empty());
+    assert_eq!(floating_geometry(&layout, 1), Some(before));
+}
+
+#[test]
+fn interactive_move_unmaximizes_floating_window() {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    check_ops_on_layout(&mut layout, floating_window_at(1));
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::MaximizeWindowToEdges { id: None },
+            Op::Communicate(1),
+            Op::InteractiveMoveBegin {
+                window: 1,
+                output_idx: 1,
+                px: 600.,
+                py: 10.,
+            },
+            Op::InteractiveMoveUpdate {
+                window: 1,
+                dx: 300.,
+                dy: 300.,
+                output_idx: 1,
+                px: 900.,
+                py: 310.,
+            },
+            Op::Communicate(1),
+            Op::InteractiveMoveEnd { window: 1 },
+            Op::Communicate(1),
+        ],
+    );
+    assert!(scrolling_ids(&layout).is_empty());
+    let geo = floating_geometry(&layout, 1).unwrap();
+    assert_eq!(geo.size, Size::from((100., 200.)));
+    assert!(layout.focus().unwrap().sizing_mode().is_normal());
 }
 
 #[test]

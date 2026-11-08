@@ -187,6 +187,7 @@ use crate::ui::screen_transition::{self, ScreenTransition};
 use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi, ScreenshotUiRenderElement};
 use crate::utils::scale::{closest_representable_scale, guess_monitor_scale};
 use crate::utils::spawning::{CHILD_DISPLAY, CHILD_ENV};
+use crate::utils::transaction::Transaction;
 use crate::utils::vblank_throttle::VBlankThrottle;
 use crate::utils::watcher::Watcher;
 use crate::utils::xwayland::satellite::Satellite;
@@ -1175,6 +1176,80 @@ impl State {
 
         self.niri.layout.focus_output(&target);
         self.move_cursor_to_output(&target);
+    }
+
+    /// Minimizes a window, playing the close animation as it leaves the layout.
+    ///
+    /// Does nothing if the window isn't laid out (already minimized, or interactively moved).
+    pub fn minimize_window(&mut self, window: &Window) {
+        let laid_out = self
+            .niri
+            .layout
+            .workspaces()
+            .any(|(_, _, ws)| ws.has_window(window));
+        if !laid_out {
+            return;
+        }
+
+        let output = window.toplevel().and_then(|toplevel| {
+            let (_, output) = self
+                .niri
+                .layout
+                .find_window_and_output(toplevel.wl_surface())?;
+            output.cloned()
+        });
+        let was_active = self.niri.layout.focus().map(|m| &m.window) == Some(window);
+
+        // The same animation as when the window closes: snapshot, then animate the snapshot out
+        // while the tile leaves the layout.
+        self.store_unmap_snapshot(window, output.as_ref());
+        let transaction = Transaction::new();
+        let blocker = transaction.blocker();
+        self.backend.with_primary_renderer(|renderer| {
+            self.niri
+                .layout
+                .start_close_animation_for_window(renderer, window, blocker);
+        });
+        // If no animation took the snapshot (e.g. a background tab), don't keep it around: it
+        // would be stale by the time the window really closes.
+        self.niri.layout.clear_unmap_snapshot(window);
+
+        self.niri
+            .layout
+            .minimize_window(window, transaction.clone());
+
+        // If this is the only instance, then this transaction will complete immediately, so no
+        // need to set the timer.
+        if !transaction.is_last() {
+            transaction.register_deadline_timer(&self.niri.event_loop);
+        }
+
+        if was_active {
+            self.maybe_warp_cursor_to_focus();
+        }
+
+        if let Some(output) = output {
+            self.niri.queue_redraw(&output);
+        }
+        self.niri.queue_redraw_mru_output();
+    }
+
+    /// Restores a minimized window to its place, focusing it if `activate`.
+    ///
+    /// Returns `false` if the window isn't minimized.
+    pub fn unminimize_window(&mut self, window: &Window, activate: bool) -> bool {
+        if !self.niri.layout.unminimize_window(window, false) {
+            return false;
+        }
+
+        if activate {
+            self.focus_window(window);
+        } else {
+            // FIXME: granular
+            self.niri.queue_redraw_all();
+        }
+
+        true
     }
 
     /// Focus a specific window, taking care of a potential active output change and cursor
@@ -3063,7 +3138,6 @@ impl Niri {
             primary_selection_disabled: config.clipboard.disable_primary,
             restricted,
             credentials_unknown,
-            last_minimize_spawn: Mutex::new(None),
         });
 
         if let Err(err) = self.display_handle.insert_client(client, data) {
@@ -7528,8 +7602,6 @@ pub struct ClientState {
     pub restricted: bool,
     /// We cannot retrieve this client's socket credentials.
     pub credentials_unknown: bool,
-    /// Monotonic time when a minimize request from this client last spawned the minimize helper.
-    pub last_minimize_spawn: Mutex<Option<Duration>>,
 }
 
 impl ClientData for ClientState {

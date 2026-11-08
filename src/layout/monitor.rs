@@ -408,8 +408,9 @@ impl<W: LayoutElement> Monitor<W> {
         self.workspaces.iter().flat_map(|ws| ws.windows())
     }
 
+    /// Whether the window is laid out on this monitor (minimized windows are not).
     pub fn has_window(&self, window: &W::Id) -> bool {
-        self.windows().any(|win| win.id() == window)
+        self.workspaces.iter().any(|ws| ws.has_window(window))
     }
 
     pub fn add_workspace_at(&mut self, idx: usize) {

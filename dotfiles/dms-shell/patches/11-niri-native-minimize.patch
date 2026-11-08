@@ -1,0 +1,25 @@
+--- a/DankCommon/Common/Compositor.qml
++++ b/DankCommon/Common/Compositor.qml
+@@ -8,9 +8,13 @@
+ 
+     readonly property string desktop: (Quickshell.env("XDG_CURRENT_DESKTOP") || "").split(":")[0].toLowerCase()
+ 
++    // The niri built from this repo minimizes natively: wlr-foreign-toplevel
++    // set_minimized/unset_minimized and the minimized state work, so the dock
++    // can minimize on click and dim minimized apps. Upstream niri ignores those
++    // requests; this patch only makes sense together with that niri.
+     readonly property bool supportsMinimize: {
+         if (Quickshell.env("NIRI_SOCKET"))
+-            return false;
++            return true;
+         if (Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE"))
+             return false;
+         if (Quickshell.env("SWAYSOCK"))
+@@ -22,6 +26,7 @@
+ 
+         switch (desktop) {
+         case "niri":
++            return true;
+         case "hyprland":
+         case "sway":
+         case "scroll":

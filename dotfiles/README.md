@@ -14,8 +14,7 @@ dotfiles/install.sh config      # solo una parte: config | dms-shell | niri
 
 | En el repo | Se instala en | Cómo |
 |---|---|---|
-| `src/handlers/xdg_shell.rs` | `/usr/local/bin/niri` | compilado |
-| `src/layout/floating.rs` | `/usr/local/bin/niri` | compilado |
+| `src/`, `niri-ipc/`, `niri-config/` | `/usr/local/bin/niri` | compilado |
 | `dotfiles/niri/config.kdl`, `custom/*.kdl`, `scripts/*.sh` | `~/.config/niri/` | enlace simbólico |
 | `dotfiles/matugen/templates/niri-futurista.kdl` | `~/.config/matugen/templates/` | enlace simbólico |
 | `dotfiles/matugen/config.toml` | `~/.config/matugen/` | copia (rutas absolutas) |
@@ -35,12 +34,34 @@ arranca sin ellos y los carga en cuanto DMS los escribe.
 
 ## Cambios en el código de niri
 
-- **Botón de minimizar** (`src/handlers/xdg_shell.rs`). niri deja
-  `minimize_request` sin implementar, así que el botón de minimizar de las
-  decoraciones del cliente no hacía nada. Ahora llama a
-  `~/.config/niri/scripts/niri-minimize.sh minimize-id <id>`, que aparca la
-  ventana en el workspace `min` y recuerda de dónde venía. La ruta va fija en el
-  código: el script tiene que estar instalado (`install.sh config`).
+- **Minimizar nativo** (`src/layout/workspace.rs`). Upstream no tiene
+  minimizar. Aquí una ventana minimizada sale del layout (no se dibuja, no se
+  enfoca, no ocupa sitio) pero sigue en su workspace, con lo necesario para
+  volver exactamente donde estaba: misma columna (y misma posición dentro de
+  ella si la compartía), o misma posición y tamaño si era flotante. Un
+  workspace con ventanas minimizadas no se recoge aunque parezca vacío, y viaja
+  con ellas si cambia de monitor. Entradas:
+  - acciones `minimize-window` y `unminimize-window` (sin `--id`, la última
+    minimizada), también por `niri msg action`;
+  - el botón de minimizar de las decoraciones del cliente (`minimize_request`);
+  - `wlr-foreign-toplevel` `set_minimized`/`unset_minimized` y el estado
+    `minimized`, que es lo que usa el dock de DMS;
+  - enfocar una minimizada (dock, Alt+Tab, `focus-window`, xdg-activation) la
+    restaura.
+
+  La IPC añade `is_minimized` a cada ventana (`niri msg windows` la marca con
+  `(minimized)`). Al minimizar se reproduce la animación de cierre y al
+  restaurar la de apertura. Las acciones dirigidas a una ventana minimizada por
+  id (redimensionar, mover a otro workspace...) no hacen nada. Sustituye a la
+  emulación anterior con un workspace `min`, una pila en `$XDG_RUNTIME_DIR` y un
+  vigilante del event-stream, que lanzaba unos 11 procesos por pulsación.
+- **Maximizar flotantes en su sitio** (`src/layout/floating.rs`). Upstream
+  saca una ventana flotante al layout de mosaico para maximizarla y la devuelve
+  al restaurar. Aquí se queda flotante, ocupando el área de trabajo, y al
+  restaurar recupera su posición y tamaño. Vale para el botón y el doble clic de
+  la barra de título, `maximize-window-to-edges` (`Mod+M`, que alterna) y
+  `wlr-foreign-toplevel`. Si el área de trabajo cambia (aparece la barra), la
+  ventana maximizada se ajusta. Arrastrarla la restaura.
 - **Ventanas flotantes hasta el borde** (`src/layout/floating.rs`). Upstream
   obliga a dejar en pantalla un cuarto de la ventana (hasta 75 px, cifras de
   Mutter). Aquí basta una franja de 10 px dentro del área de trabajo, no de la
@@ -64,12 +85,15 @@ dos parches QML sobre DMS y unos ajustes:
   `dockTransparency`, `dockBorder*`, `dockShowTrash`, iconos `WhiteSur-purple`.
 - `niri/config.kdl`: `layer-rule` que quita la sombra de niri a `dms:dock` (DMS
   ya pinta la suya).
-- `niri/scripts/niri-minimize-watch.sh`: restaura una ventana minimizada al
-  pulsarla en el dock. Solo corre mientras hay alguna minimizada.
+- `dms-shell/patches/11-niri-native-minimize.patch`: DMS da por hecho que
+  niri no minimiza y le desactiva `supportsMinimize`. Con el minimizado nativo
+  de este niri se activa: pulsar la app enfocada en el dock la minimiza, pulsar
+  una minimizada la restaura, y el icono se atenúa mientras está minimizada.
+  Solo tiene sentido con este niri: el de upstream ignora esas peticiones.
 
 El resto de parches: `05` OSD de volumen y brillo estilo macOS, `06` centro de
 control estilo macOS, `02` caché del mapa de categorías del lanzador, `04`
-`07` `08` `09` `10` notificaciones.
+`07` `08` `09` `10` notificaciones, `11` minimizar en niri.
 
 `dms-shell/build.sh` clona DMS **v1.6.0** (commit `0bbe8338`), aplica los
 parches e instala el resultado en `~/.local/share/dms-shell-custom`, que
@@ -90,7 +114,6 @@ mismo repo se instala en otro equipo sin arrastrar arreglos de este:
 
 | Qué | Cuándo corre | Fuera de este equipo |
 |---|---|---|
-| `niri-minimize-watch.sh` | desde que se minimiza una ventana hasta que no queda ninguna | igual |
 | `power-profile-auto.service` | toda la sesión, dormido hasta un evento de `upower --monitor` | se salta sin batería ni `powerprofilesctl` |
 | `audio-init.service` | una vez al entrar, y sale | se salta si la placa no es MS-15H4 |
 | `ssm-tray.service` | toda la sesión | se salta si no está `~/.local/bin/ssm-tray` |
@@ -98,16 +121,17 @@ mismo repo se instala en otro equipo sin arrastrar arreglos de este:
 Antes, con la sesión en reposo: el vigilante de minimizar vivía siempre (bash
 + `niri msg event-stream`, ~20 MB) y lanzaba dos `jq` y el helper en cada
 cambio de foco; el perfil de energía leía sysfs cada 5 s con forks de `sleep`
-y `cat` (coreutils en Rust: ~8 MB por proceso). Medido el 2026-11-07.
+y `cat` (coreutils en Rust: ~8 MB por proceso). Medido el 2026-11-07. Ahora
+minimizar lo hace niri y no hay vigilante.
 
 Los scripts que corren por pulsación también lanzan los procesos justos
 (contados con `strace -f -e execve` contra un `niri` falso, 2026-11-07):
 
 | Orden | Antes | Ahora |
 |---|---|---|
-| `niri-minimize.sh minimize` | 20 | 11 |
-| `niri-minimize.sh restore-id` (clic en el dock) | 25 | 13 |
-| `niri-minimize.sh restore` | 31 | 14 |
+| minimizar (`niri-minimize.sh minimize`) | 20 | 0: acción de niri |
+| restaurar desde el dock (`niri-minimize.sh restore-id`) | 25 | 0: wlr-foreign-toplevel |
+| restaurar la última (`niri-minimize.sh restore`) | 31 | 0: acción de niri |
 | `toggle-touchpad.sh` | 5, uno `python3` | 4, sin `python3` |
 | `video-hwdec.sh`, por muestra | ~300 (`grep` por descriptor) + `sleep` | 1 (`awk`) |
 
@@ -117,8 +141,7 @@ proceso de coreutils ~2 ms.
 ## Fuera del repo
 
 - Se instalan aparte: `ssm-tray` y lo que usan los scripts: `jq`, `pactl`,
-  `notify-send`, `fuzzel`, `upower`, `powerprofilesctl`, `setsid` y `flock`
-  (util-linux).
+  `notify-send`, `fuzzel`, `upower` y `powerprofilesctl`.
 - `sony-wf-c710n-autoswitch.service` no tiene que ver con niri y no está aquí.
   WirePlumber 0.5 ya hace ese cambio de perfil A2DP/HFP él solo
   (`bluetooth.autoswitch-to-headset-profile`, activo por defecto).

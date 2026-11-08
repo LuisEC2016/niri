@@ -234,6 +234,14 @@ impl<W: LayoutElement> FloatingSpace<W> {
     ) {
         for (tile, data) in zip(&mut self.tiles, &mut self.data) {
             tile.update_config(view_size, scale, options.clone());
+
+            // Maximized windows follow the working area (a bar appearing, an output resize).
+            if self.working_area != working_area
+                && tile.window().pending_sizing_mode().is_maximized()
+            {
+                tile.request_maximized(working_area.size, false, None);
+            }
+
             data.update(tile);
             data.update_config(working_area);
         }
@@ -421,13 +429,77 @@ impl<W: LayoutElement> FloatingSpace<W> {
         self.tiles.is_empty()
     }
 
+    /// Adds a tile with its floating size: maximized and fullscreen tiles leave that state.
     pub fn add_tile(&mut self, tile: Tile<W>, activate: bool) {
-        self.add_tile_at(0, tile, activate);
+        self.add_tile_at(0, tile, activate, false);
     }
 
-    fn add_tile_at(&mut self, mut idx: usize, mut tile: Tile<W>, activate: bool) {
+    /// Like [`Self::add_tile`], but a maximized tile stays maximized.
+    ///
+    /// For putting back a tile that was maximized in this layout, like a restored minimized one.
+    pub fn add_tile_keeping_maximized(&mut self, tile: Tile<W>, activate: bool) {
+        self.add_tile_at(0, tile, activate, true);
+    }
+
+    fn add_tile_at(
+        &mut self,
+        mut idx: usize,
+        mut tile: Tile<W>,
+        activate: bool,
+        keep_maximized: bool,
+    ) {
         tile.update_config(self.view_size, self.scale, self.options.clone());
 
+        let keep_maximized = keep_maximized && tile.window().pending_sizing_mode().is_maximized();
+        if keep_maximized {
+            tile.request_maximized(self.working_area.size, true, None);
+        } else {
+            Self::request_floating_size(&mut tile);
+        }
+
+        let win = tile.window();
+        if activate || self.tiles.is_empty() {
+            self.active_window_id = Some(win.id().clone());
+        }
+
+        // Make sure the tile isn't inserted below its parent.
+        for (i, tile_above) in self.tiles.iter().enumerate().take(idx) {
+            if win.is_child_of(tile_above.window()) {
+                idx = i;
+                break;
+            }
+        }
+
+        let pos = if keep_maximized {
+            self.working_area.loc
+        } else {
+            self.stored_or_default_tile_pos(&tile).unwrap_or_else(|| {
+                center_preferring_top_left_in_area(self.working_area, tile.tile_size())
+            })
+        };
+
+        let data = Data::new(self.working_area, &tile, pos);
+        self.data.insert(idx, data);
+        self.tiles.insert(idx, tile);
+
+        self.bring_up_descendants_of(idx);
+    }
+
+    pub fn add_tile_above(&mut self, above: &W::Id, mut tile: Tile<W>, activate: bool) {
+        let idx = self.idx_of(above).unwrap();
+
+        let above_pos = self.data[idx].logical_pos;
+        let above_size = self.data[idx].size;
+        let tile_size = tile.tile_size();
+        let pos = above_pos + (above_size.to_point() - tile_size.to_point()).downscale(2.);
+        let pos = self.clamp_within_working_area(pos, tile_size);
+        tile.floating_pos = Some(self.logical_to_size_frac(pos));
+
+        self.add_tile_at(idx, tile, activate, false);
+    }
+
+    /// Requests the tile's floating window size, taking it out of maximized or fullscreen.
+    fn request_floating_size(tile: &mut Tile<W>) {
         // Restore the previous floating window size, and in case the tile is fullscreen,
         // unfullscreen it.
         let floating_size = tile.floating_window_size;
@@ -450,41 +522,55 @@ impl<W: LayoutElement> FloatingSpace<W> {
         size.h = ensure_min_max_size_maybe_zero(size.h, min_size.h, max_size.h);
 
         win.request_size_once(size, true);
+    }
 
-        if activate || self.tiles.is_empty() {
-            self.active_window_id = Some(win.id().clone());
+    /// Maximizes a floating window in place, filling the working area, or restores it.
+    ///
+    /// The window stays in the floating layout. Unmaximizing returns it to the position and size
+    /// it had before maximizing.
+    pub fn set_maximized(&mut self, id: &W::Id, maximize: bool) {
+        let Some(idx) = self.idx_of(id) else {
+            return;
+        };
+
+        if self.tiles[idx]
+            .window()
+            .pending_sizing_mode()
+            .is_maximized()
+            == maximize
+        {
+            return;
         }
 
-        // Make sure the tile isn't inserted below its parent.
-        for (i, tile_above) in self.tiles.iter().enumerate().take(idx) {
-            if win.is_child_of(tile_above.window()) {
-                idx = i;
-                break;
+        // Stop interactive resize.
+        if let Some(resize) = &self.interactive_resize {
+            if &resize.window == id {
+                self.interactive_resize = None;
             }
         }
 
-        let pos = self.stored_or_default_tile_pos(&tile).unwrap_or_else(|| {
-            center_preferring_top_left_in_area(self.working_area, tile.tile_size())
-        });
+        let new_pos = if maximize {
+            let tile = &mut self.tiles[idx];
 
-        let data = Data::new(self.working_area, &tile, pos);
-        self.data.insert(idx, data);
-        self.tiles.insert(idx, tile);
+            // Remember the floating geometry to come back to.
+            if let Some(size) = tile.window().expected_size() {
+                tile.floating_window_size = Some(size);
+            }
+            tile.floating_pos = Some(self.data[idx].pos);
 
-        self.bring_up_descendants_of(idx);
-    }
+            tile.request_maximized(self.working_area.size, true, None);
+            self.working_area.loc
+        } else {
+            let tile = &mut self.tiles[idx];
+            Self::request_floating_size(tile);
 
-    pub fn add_tile_above(&mut self, above: &W::Id, mut tile: Tile<W>, activate: bool) {
-        let idx = self.idx_of(above).unwrap();
+            match tile.floating_pos {
+                Some(pos) => self.scale_by_working_area(pos),
+                None => center_preferring_top_left_in_area(self.working_area, tile.tile_size()),
+            }
+        };
 
-        let above_pos = self.data[idx].logical_pos;
-        let above_size = self.data[idx].size;
-        let tile_size = tile.tile_size();
-        let pos = above_pos + (above_size.to_point() - tile_size.to_point()).downscale(2.);
-        let pos = self.clamp_within_working_area(pos, tile_size);
-        tile.floating_pos = Some(self.logical_to_size_frac(pos));
-
-        self.add_tile_at(idx, tile, activate);
+        self.move_and_animate(idx, new_pos);
     }
 
     fn bring_up_descendants_of(&mut self, idx: usize) {
@@ -538,12 +624,14 @@ impl<W: LayoutElement> FloatingSpace<W> {
             }
         }
 
-        // Store the floating size if we have one.
-        if let Some(size) = tile.window().expected_size() {
-            tile.floating_window_size = Some(size);
+        // Store the floating size and position, unless the window is maximized: then they were
+        // stored when it maximized, and the maximized ones would overwrite them.
+        if !tile.window().pending_sizing_mode().is_maximized() {
+            if let Some(size) = tile.window().expected_size() {
+                tile.floating_window_size = Some(size);
+            }
+            tile.floating_pos = Some(data.pos);
         }
-        // Store the floating position.
-        tile.floating_pos = Some(data.pos);
 
         let width = ColumnWidth::Fixed(tile.tile_expected_or_current_size().w);
         RemovedTile {
@@ -1372,10 +1460,10 @@ impl<W: LayoutElement> FloatingSpace<W> {
                 assert!(idx < self.options.layout.preset_window_heights.len());
             }
 
-            assert_eq!(
+            assert_ne!(
                 tile.window().pending_sizing_mode(),
-                SizingMode::Normal,
-                "floating windows cannot be maximized or fullscreen"
+                SizingMode::Fullscreen,
+                "floating windows cannot be fullscreen"
             );
 
             data.verify_invariants();

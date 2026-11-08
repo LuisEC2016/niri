@@ -1,5 +1,6 @@
 use std::cmp::max;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use niri_config::utils::MergeWith as _;
@@ -24,8 +25,8 @@ use super::scrolling::{
 use super::shadow::Shadow;
 use super::tile::{Tile, TileRenderSnapshot};
 use super::{
-    ActivateWindow, HitType, InsertPosition, InteractiveResizeData, LayoutElement, Options,
-    RemovedTile, SizeFrac,
+    ActivateWindow, ConfigureIntent, HitType, InsertPosition, InteractiveResizeData, LayoutElement,
+    Options, RemovedTile, SizeFrac,
 };
 use crate::animation::Clock;
 use crate::layout::RenderLayer;
@@ -53,6 +54,13 @@ pub struct Workspace<W: LayoutElement> {
 
     /// Whether the floating layout is active instead of the scrolling layout.
     floating_is_active: FloatingActive,
+
+    /// Windows minimized out of this workspace.
+    ///
+    /// They are out of both layouts: not rendered, not focusable and taking no space. They stay
+    /// with their workspace, so they keep it alive and follow it across outputs, and unminimizing
+    /// puts them back where they were.
+    minimized: Vec<MinimizedTile<W>>,
 
     /// The original outputs of this workspace, in preference order.
     ///
@@ -113,6 +121,29 @@ pub struct Workspace<W: LayoutElement> {
     /// Unique ID of this workspace.
     id: WorkspaceId,
 }
+
+/// A window minimized out of a workspace, with what it takes to put it back where it was.
+#[derive(Debug)]
+struct MinimizedTile<W: LayoutElement> {
+    tile: Tile<W>,
+    /// Width of the column the tile was in.
+    width: ColumnWidth,
+    /// Whether the column the tile was in was full-width.
+    is_full_width: bool,
+    /// Whether the tile was in the floating layout.
+    is_floating: bool,
+    /// Index of the scrolling column the tile was in.
+    column_idx: usize,
+    /// Another window that shared the tile's column, and the tile's index in that column.
+    ///
+    /// Lets the tile return into the same column if that window is still around.
+    column_sibling: Option<(W::Id, usize)>,
+    /// Minimize order across all workspaces: higher was minimized later.
+    serial: u64,
+}
+
+/// Source of [`MinimizedTile::serial`].
+static MINIMIZE_SERIAL: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputId(String);
@@ -262,6 +293,7 @@ impl<W: LayoutElement> Workspace<W> {
             scrolling,
             floating,
             floating_is_active: FloatingActive::No,
+            minimized: Vec::new(),
             original_outputs,
             scale,
             transform: output.current_transform(),
@@ -324,6 +356,7 @@ impl<W: LayoutElement> Workspace<W> {
             scrolling,
             floating,
             floating_is_active: FloatingActive::No,
+            minimized: Vec::new(),
             output: None,
             scale,
             transform: Transform::Normal,
@@ -422,6 +455,14 @@ impl<W: LayoutElement> Workspace<W> {
             options.clone(),
         );
 
+        for minimized in &mut self.minimized {
+            minimized.tile.update_config(
+                self.view_size,
+                self.scale.fractional_scale(),
+                options.clone(),
+            );
+        }
+
         let shadow_config =
             compute_workspace_shadow_config(options.overview.workspace_shadow, self.view_size);
         self.shadow.update_config(shadow_config);
@@ -445,6 +486,9 @@ impl<W: LayoutElement> Workspace<W> {
     pub fn update_shaders(&mut self) {
         self.scrolling.update_shaders();
         self.floating.update_shaders();
+        for minimized in &mut self.minimized {
+            minimized.tile.update_shaders();
+        }
         self.shadow.update_shaders();
     }
 
@@ -456,16 +500,20 @@ impl<W: LayoutElement> Workspace<W> {
         self.tiles_mut().map(Tile::window_mut)
     }
 
+    /// All tiles of this workspace, minimized ones included.
     pub fn tiles(&self) -> impl Iterator<Item = &Tile<W>> + '_ {
         let scrolling = self.scrolling.tiles();
         let floating = self.floating.tiles();
-        scrolling.chain(floating)
+        let minimized = self.minimized.iter().map(|m| &m.tile);
+        scrolling.chain(floating).chain(minimized)
     }
 
+    /// All tiles of this workspace, minimized ones included.
     pub fn tiles_mut(&mut self) -> impl Iterator<Item = &mut Tile<W>> + '_ {
         let scrolling = self.scrolling.tiles_mut();
         let floating = self.floating.tiles_mut();
-        scrolling.chain(floating)
+        let minimized = self.minimized.iter_mut().map(|m| &mut m.tile);
+        scrolling.chain(floating).chain(minimized)
     }
 
     pub fn is_floating(&self, id: &W::Id) -> bool {
@@ -603,6 +651,11 @@ impl<W: LayoutElement> Workspace<W> {
                 scale.fractional_scale(),
                 self.options.clone(),
             );
+            for minimized in &mut self.minimized {
+                minimized
+                    .tile
+                    .update_config(size, scale.fractional_scale(), self.options.clone());
+            }
 
             let shadow_config =
                 compute_workspace_shadow_config(self.options.overview.workspace_shadow, size);
@@ -781,6 +834,28 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn remove_tile(&mut self, id: &W::Id, transaction: Transaction) -> RemovedTile<W> {
+        if let Some(idx) = self.minimized_idx(id) {
+            let MinimizedTile {
+                mut tile,
+                width,
+                is_full_width,
+                is_floating,
+                ..
+            } = self.minimized.remove(idx);
+            tile.window_mut().set_minimized(false);
+
+            if let Some(output) = &self.output {
+                tile.window().output_leave(output);
+            }
+
+            return RemovedTile {
+                tile,
+                width,
+                is_full_width,
+                is_floating,
+            };
+        }
+
         let mut from_floating = false;
         let removed = if self.floating.has_window(id) {
             from_floating = true;
@@ -1331,12 +1406,14 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.set_fullscreen(window, is_fullscreen);
 
         // When going from normal to fullscreen, remember if we should unfullscreen to floating.
+        // A floating window that was maximized in place arrives maximized, not normal: it still
+        // has to come back to floating.
         let tile = self
             .scrolling
             .tiles_mut()
             .find(|tile| tile.window().id() == window)
             .unwrap();
-        if was_normal && !tile.window().pending_sizing_mode().is_normal() {
+        if (was_normal || restore_to_floating) && !tile.window().pending_sizing_mode().is_normal() {
             tile.restore_to_floating = restore_to_floating;
         }
     }
@@ -1351,17 +1428,14 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn set_maximized(&mut self, window: &W::Id, maximize: bool) {
-        let mut restore_to_floating = false;
+        // Floating windows maximize in place, staying floating, and come back to their floating
+        // position and size.
         if self.floating.has_window(window) {
-            if maximize {
-                restore_to_floating = true;
-                self.toggle_window_floating(Some(window));
-            } else {
-                // Floating windows are never maximized, so this is an unmaximize request for an
-                // already unmaximized window.
-                return;
-            }
-        } else if !maximize {
+            self.floating.set_maximized(window, maximize);
+            return;
+        }
+
+        if !maximize {
             // The window is in the scrolling layout and we're requesting to unmaximize. If it is
             // indeed maximized (i.e. this isn't a duplicate unmaximize request), then we may
             // need to unmaximize into floating.
@@ -1389,14 +1463,14 @@ impl<W: LayoutElement> Workspace<W> {
 
         self.scrolling.set_maximized(window, maximize);
 
-        // When going from normal to maximized, remember if we should unmaximize to floating.
+        // Maximizing in the scrolling layout: unmaximizing keeps the window there.
         let tile = self
             .scrolling
             .tiles_mut()
             .find(|tile| tile.window().id() == window)
             .unwrap();
         if was_normal && !tile.window().pending_sizing_mode().is_normal() {
-            tile.restore_to_floating = restore_to_floating;
+            tile.restore_to_floating = false;
         }
     }
 
@@ -1406,10 +1480,14 @@ impl<W: LayoutElement> Workspace<W> {
         // We have to check the column property in case the window is in the scrolling layout and
         // both maximized and fullscreen. In this case, only the column knows whether it's
         // maximized.
-        //
-        // In the floating layout, windows cannot be maximized.
         if let Some(col) = self.scrolling.columns().find(|col| col.contains(window)) {
             current = col.is_pending_maximized();
+        } else if let Some(tile) = self
+            .floating
+            .tiles()
+            .find(|tile| tile.window().id() == window)
+        {
+            current = tile.window().pending_sizing_mode().is_maximized();
         }
 
         self.set_maximized(window, !current);
@@ -1600,8 +1678,150 @@ impl<W: LayoutElement> Workspace<W> {
         self.windows().next().is_some()
     }
 
+    /// Whether the window is laid out on this workspace (minimized windows are not).
     pub fn has_window(&self, window: &W::Id) -> bool {
-        self.windows().any(|win| win.id() == window)
+        self.scrolling
+            .tiles()
+            .any(|tile| tile.window().id() == window)
+            || self.floating.has_window(window)
+    }
+
+    /// Whether the window belongs to this workspace, laid out or minimized.
+    pub fn contains_window(&self, window: &W::Id) -> bool {
+        self.has_window(window) || self.is_minimized(window)
+    }
+
+    pub fn is_minimized(&self, window: &W::Id) -> bool {
+        self.minimized_idx(window).is_some()
+    }
+
+    fn minimized_idx(&self, window: &W::Id) -> Option<usize> {
+        self.minimized
+            .iter()
+            .position(|m| m.tile.window().id() == window)
+    }
+
+    /// Minimized windows of this workspace with their minimize serials (higher is more recent).
+    pub fn minimized_windows(&self) -> impl Iterator<Item = (&W, u64)> {
+        self.minimized.iter().map(|m| (m.tile.window(), m.serial))
+    }
+
+    /// Takes the window out of the layout and keeps it hidden on this workspace.
+    ///
+    /// Remembers where the window was (layout, column and position within it) so that
+    /// [`Self::unminimize_window`] puts it back there. Returns `false` if the window isn't laid
+    /// out on this workspace.
+    pub fn minimize_window(&mut self, id: &W::Id, transaction: Transaction) -> bool {
+        let mut column_idx = 0;
+        let mut column_sibling = None;
+
+        let removed = if self.floating.has_window(id) {
+            self.floating.remove_tile(id)
+        } else {
+            let found = self
+                .scrolling
+                .columns()
+                .enumerate()
+                .find(|(_, col)| col.contains(id))
+                .map(|(col_idx, col)| {
+                    let tile_idx = col.position(id).unwrap();
+                    let sibling = col
+                        .tiles()
+                        .map(|(tile, _)| tile.window().id())
+                        .find(|win| *win != id)
+                        .map(|win| (win.clone(), tile_idx));
+                    (col_idx, sibling)
+                });
+            let Some((col_idx, sibling)) = found else {
+                return false;
+            };
+            column_idx = col_idx;
+            column_sibling = sibling;
+            self.scrolling.remove_tile(id, transaction)
+        };
+
+        let RemovedTile {
+            mut tile,
+            width,
+            is_full_width,
+            is_floating,
+        } = removed;
+
+        // The window stays entered on the output: it is still on this workspace, just hidden.
+        tile.window_mut().set_minimized(true);
+        tile.window_mut().set_activated(false);
+
+        self.minimized.push(MinimizedTile {
+            tile,
+            width,
+            is_full_width,
+            is_floating,
+            column_idx,
+            column_sibling,
+            serial: MINIMIZE_SERIAL.fetch_add(1, Ordering::Relaxed),
+        });
+
+        self.update_focus_floating_tiling_after_removing(is_floating);
+
+        true
+    }
+
+    /// Puts a minimized window back where it was.
+    ///
+    /// Returns `false` if the window isn't minimized on this workspace.
+    pub fn unminimize_window(&mut self, id: &W::Id, activate: bool) -> bool {
+        let Some(idx) = self.minimized_idx(id) else {
+            return false;
+        };
+
+        let MinimizedTile {
+            mut tile,
+            width,
+            is_full_width,
+            is_floating,
+            column_idx,
+            column_sibling,
+            serial: _,
+        } = self.minimized.remove(idx);
+        tile.window_mut().set_minimized(false);
+
+        // Fullscreen only works in the scrolling layout.
+        if is_floating && !tile.window().pending_sizing_mode().is_fullscreen() {
+            self.floating.add_tile_keeping_maximized(tile, activate);
+
+            if activate || self.scrolling.is_empty() {
+                self.floating_is_active = FloatingActive::Yes;
+            }
+        } else {
+            // Return into the column the window shared, if it's still there. Only a window of
+            // normal size: maximized and fullscreen windows take a column of their own.
+            let in_column = column_sibling
+                .filter(|_| tile.window().pending_sizing_mode().is_normal())
+                .and_then(|(sibling, tile_idx)| {
+                    self.scrolling
+                        .columns()
+                        .enumerate()
+                        .find(|(_, col)| col.contains(&sibling))
+                        .map(|(col_idx, col)| (col_idx, tile_idx.min(col.tiles().count())))
+                });
+
+            if let Some((col_idx, tile_idx)) = in_column {
+                self.scrolling
+                    .add_tile_to_column(col_idx, Some(tile_idx), tile, activate);
+            } else {
+                let col_idx = column_idx.min(self.scrolling.columns().count());
+                self.scrolling
+                    .add_tile(Some(col_idx), tile, activate, width, is_full_width, None);
+            }
+
+            if activate {
+                self.floating_is_active = FloatingActive::No;
+            }
+        }
+
+        self.start_open_animation(id);
+
+        true
     }
 
     pub fn find_wl_surface(&self, wl_surface: &WlSurface) -> Option<&W> {
@@ -1636,14 +1856,20 @@ impl<W: LayoutElement> Workspace<W> {
     pub fn tiles_with_ipc_layouts(&self) -> impl Iterator<Item = (&Tile<W>, WindowLayout)> {
         let scrolling = self.scrolling.tiles_with_ipc_layouts();
         let floating = self.floating.tiles_with_ipc_layouts();
-        floating.chain(scrolling)
+        // Minimized windows have no position, like interactively moved ones.
+        let minimized = self
+            .minimized
+            .iter()
+            .map(|m| (&m.tile, m.tile.ipc_layout_template()));
+        floating.chain(scrolling).chain(minimized)
     }
 
     /// Tiles in the same order as [`Self::tiles_with_ipc_layouts`], without computing layouts.
     pub fn tiles_in_ipc_order(&self) -> impl Iterator<Item = &Tile<W>> {
         let scrolling = self.scrolling.tiles();
         let floating = self.floating.tiles();
-        floating.chain(scrolling)
+        let minimized = self.minimized.iter().map(|m| &m.tile);
+        floating.chain(scrolling).chain(minimized)
     }
 
     pub fn active_window_visual_rectangle(&self) -> Option<Rectangle<f64, Logical>> {
@@ -1852,6 +2078,16 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn update_window(&mut self, window: &W::Id, serial: Option<Serial>) {
+        if let Some(idx) = self.minimized_idx(window) {
+            let tile = &mut self.minimized[idx].tile;
+            // Do this before calling update_window() so it can get up-to-date info.
+            if let Some(serial) = serial {
+                tile.window_mut().on_commit(serial);
+            }
+            tile.update_window();
+            return;
+        }
+
         if !self.floating.update_window(window, serial) {
             self.scrolling.update_window(window, serial);
         }
@@ -1862,6 +2098,26 @@ impl<W: LayoutElement> Workspace<W> {
             .refresh(is_active && !self.floating_is_active.get(), is_focused);
         self.floating
             .refresh(is_active && self.floating_is_active.get(), is_focused);
+
+        for minimized in &mut self.minimized {
+            let win = minimized.tile.window_mut();
+            win.set_activated(false);
+
+            // If transactions are disabled, also disable combined throttling, like the layouts.
+            let intent = if self.options.disable_resize_throttling {
+                ConfigureIntent::CanSend
+            } else {
+                win.configure_intent()
+            };
+            if matches!(
+                intent,
+                ConfigureIntent::CanSend | ConfigureIntent::ShouldSend
+            ) {
+                win.send_pending_configure();
+            }
+
+            win.refresh();
+        }
     }
 
     pub fn scroll_amount_to_activate(&self, window: &W::Id) -> f64 {
@@ -1877,6 +2133,9 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn activate_window(&mut self, window: &W::Id) -> bool {
+        // Activating a minimized window restores it.
+        self.unminimize_window(window, false);
+
         if self.floating.activate_window(window) {
             self.floating_is_active = FloatingActive::Yes;
             true
@@ -1889,6 +2148,9 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn activate_window_without_raising(&mut self, window: &W::Id) -> bool {
+        // Activating a minimized window restores it.
+        self.unminimize_window(window, false);
+
         if self.floating.activate_window_without_raising(window) {
             self.floating_is_active = FloatingActive::Yes;
             true
@@ -2082,6 +2344,30 @@ impl<W: LayoutElement> Workspace<W> {
             assert!(
                 self.floating_is_active.get(),
                 "when scrolling is empty but floating isn't, floating should be active"
+            );
+        }
+
+        for tile in self.scrolling.tiles().chain(self.floating.tiles()) {
+            assert!(
+                !tile.window().is_minimized(),
+                "laid out windows must not be marked minimized"
+            );
+        }
+        for (idx, minimized) in self.minimized.iter().enumerate() {
+            let win = minimized.tile.window();
+            assert!(
+                win.is_minimized(),
+                "minimized windows must be marked minimized"
+            );
+            assert!(
+                !self.has_window(win.id()),
+                "minimized windows must not be laid out"
+            );
+            assert!(
+                self.minimized[idx + 1..]
+                    .iter()
+                    .all(|other| other.tile.window().id() != win.id()),
+                "a window can be minimized only once"
             );
         }
 

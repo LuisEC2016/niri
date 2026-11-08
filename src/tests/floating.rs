@@ -479,13 +479,14 @@ fn interactive_move_unmaximize_to_floating_restores_size() {
     niri.layout.set_maximized(&window, true);
     f.double_roundtrip(id);
 
-    // This should request a maximized size.
+    // This should request a maximized size. The window maximizes in place, staying floating,
+    // so the bounds are the floating ones.
     assert_snapshot!(
         f.client(id).window(&surface).format_recent_configures(),
-        @"size: 1920 × 1080, bounds: 1888 × 1048, states: [Activated, Maximized]"
+        @"size: 1920 × 1080, bounds: 1920 × 1080, states: [Activated, Maximized]"
     );
 
-    // Start an interactive move which causes an unmaximize into floating.
+    // Start an interactive move which causes an unmaximize.
     let output = f.niri_output(1);
     let niri = f.niri();
     let mapped = niri.layout.windows().next().unwrap().1;
@@ -1078,7 +1079,7 @@ fn unmaximize_to_same_size_floating() {
 
     let _ = f.client(id).window(&surface).recent_configures();
 
-    // Maximize.
+    // Maximize. Floating windows maximize in place, so the bounds stay the floating ones.
     let window = f.client(id).window(&surface);
     window.set_maximized();
     f.double_roundtrip(id);
@@ -1086,11 +1087,12 @@ fn unmaximize_to_same_size_floating() {
     // The maximize configure.
     assert_snapshot!(
         f.client(id).window(&surface).format_recent_configures(),
-        @"size: 1920 × 1080, bounds: 1888 × 1048, states: [Activated, Maximized]"
+        @"size: 1920 × 1080, bounds: 1920 × 1080, states: [Activated, Maximized]"
     );
 
-    // Unmaximize into floating.
-    f.niri().layout.toggle_window_floating(None);
+    // Unmaximize, still floating.
+    let window = f.client(id).window(&surface);
+    window.unset_maximized();
     f.double_roundtrip(id);
 
     // We should see a configure with the same size and no maximized state.
@@ -1165,10 +1167,10 @@ fn unmaximize_to_same_size_windowed_fullscreen_floating() {
     window.set_maximized();
     f.double_roundtrip(id);
 
-    // The maximize configure.
+    // The maximize configure, in place in the floating layout.
     assert_snapshot!(
         f.client(id).window(&surface).format_recent_configures(),
-        @"size: 1920 × 1080, bounds: 1888 × 1048, states: [Activated, Maximized]"
+        @"size: 1920 × 1080, bounds: 1920 × 1080, states: [Activated, Maximized]"
     );
 
     // Enable windowed-fullscreen.
@@ -1178,24 +1180,19 @@ fn unmaximize_to_same_size_windowed_fullscreen_floating() {
     // The windowed-fullscreen configure.
     assert_snapshot!(
         f.client(id).window(&surface).format_recent_configures(),
-        @"size: 1920 × 1080, bounds: 1888 × 1048, states: [Activated, Fullscreen]"
-    );
-
-    // Go back to windowed-fullscreen floating.
-    f.niri().layout.toggle_window_floating(None);
-    f.double_roundtrip(id);
-
-    // Should send configure because the bounds have changed.
-    assert_snapshot!(
-        f.client(id).window(&surface).format_recent_configures(),
         @"size: 1920 × 1080, bounds: 1920 × 1080, states: [Activated, Fullscreen]"
     );
+
+    // Unmaximize while in windowed-fullscreen.
+    f.niri().layout.set_maximized(&window_id, false);
+    f.double_roundtrip(id);
+    let _ = f.client(id).window(&surface).recent_configures();
 
     // Disable windowed-fullscreen.
     f.niri().layout.toggle_windowed_fullscreen(&window_id);
     f.double_roundtrip(id);
 
-    // Should send configure dropping the Fullscreen state.
+    // Should send configure dropping the Fullscreen state, back to the same floating size.
     assert_snapshot!(
         f.client(id).window(&surface).format_recent_configures(),
         @"size: 1920 × 1080, bounds: 1920 × 1080, states: [Activated]"
@@ -1268,7 +1265,7 @@ layout {
 
     let _ = f.client(id).window(&surface).recent_configures();
 
-    // Maximize.
+    // Maximize, in place in the floating layout.
     let window = f.client(id).window(&surface);
     window.set_maximized();
     f.double_roundtrip(id);
@@ -1279,8 +1276,9 @@ layout {
         @"size: 1920 × 1080, bounds: 1920 × 1080, states: [Activated, Maximized]"
     );
 
-    // Unmaximize into floating.
-    f.niri().layout.toggle_window_floating(None);
+    // Unmaximize.
+    let window = f.client(id).window(&surface);
+    window.unset_maximized();
     f.double_roundtrip(id);
 
     // We should see a configure with the same size and no Maximized state.
@@ -1362,5 +1360,40 @@ fn repeated_size_request() {
     assert_snapshot!(
         f.client(id).window(&surface).format_recent_configures(),
         @""
+    );
+}
+
+#[test]
+fn minimize_request_minimizes_and_activate_restores() {
+    let (mut f, id, surface) = set_up();
+
+    let mapped = f.niri().layout.windows().next().unwrap().1;
+    let window_id = mapped.window.clone();
+    let _ = f.client(id).window(&surface).recent_configures();
+
+    // The minimize button of client-side decorations.
+    let window = f.client(id).window(&surface);
+    window.set_minimized();
+    f.double_roundtrip(id);
+
+    let niri = f.niri();
+    assert!(niri.layout.is_minimized(&window_id));
+    assert!(niri.layout.focus().is_none());
+    // The window loses the activated state; its size doesn't change.
+    assert_snapshot!(
+        f.client(id).window(&surface).format_recent_configures(),
+        @"size: 936 × 1048, bounds: 1888 × 1048, states: []"
+    );
+
+    // Activating it (a taskbar, focus-window) restores it.
+    f.niri().layout.activate_window(&window_id);
+    f.double_roundtrip(id);
+
+    let niri = f.niri();
+    assert!(!niri.layout.is_minimized(&window_id));
+    assert_eq!(niri.layout.focus().map(|m| &m.window), Some(&window_id));
+    assert_snapshot!(
+        f.client(id).window(&surface).format_recent_configures(),
+        @"size: 936 × 1048, bounds: 1888 × 1048, states: [Activated]"
     );
 }
