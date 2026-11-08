@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::time::Duration;
 
 use calloop::Interest;
 use niri_config::PresetSize;
@@ -40,7 +41,7 @@ use crate::input::move_grab::MoveGrab;
 use crate::input::resize_grab::ResizeGrab;
 use crate::input::{AnyStartData, DOUBLE_CLICK_TIME};
 use crate::layout::ActivateWindow;
-use crate::niri::{CastTarget, PopupGrabState, State};
+use crate::niri::{CastTarget, ClientState, PopupGrabState, State};
 use crate::utils::spawning::spawn_sh;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
@@ -469,6 +470,13 @@ impl XdgShellHandler for State {
     // minimize helper, which parks the window on the "min" workspace and remembers where
     // it came from, so the button behaves like minimize does everywhere else.
     fn minimize_request(&mut self, toplevel: ToplevelSurface) {
+        // Any client can send set_minimized as often as it likes, sandboxed ones included,
+        // and every request would start a shell plus a handful of `niri msg` processes on the
+        // host. Nobody clicks minimize faster than this, so drop anything in between. The limit
+        // is per client: a global one would let one client flooding requests swallow every
+        // other client's minimize button.
+        const MIN_INTERVAL: Duration = Duration::from_millis(250);
+
         let Some((mapped, _)) = self
             .niri
             .layout
@@ -476,6 +484,21 @@ impl XdgShellHandler for State {
         else {
             return;
         };
+
+        let Some(client) = toplevel.wl_surface().client() else {
+            return;
+        };
+        let Some(data) = client.get_data::<ClientState>() else {
+            return;
+        };
+        let now = get_monotonic_time();
+        {
+            let mut last = data.last_minimize_spawn.lock().unwrap();
+            if last.is_some_and(|last| now.saturating_sub(last) < MIN_INTERVAL) {
+                return;
+            }
+            *last = Some(now);
+        }
 
         let id = mapped.id().get();
         spawn_sh(

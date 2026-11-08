@@ -3050,6 +3050,7 @@ impl Niri {
             primary_selection_disabled: config.clipboard.disable_primary,
             restricted,
             credentials_unknown,
+            last_minimize_spawn: Mutex::new(None),
         });
 
         if let Err(err) = self.display_handle.insert_client(client, data) {
@@ -7475,6 +7476,8 @@ pub struct ClientState {
     pub restricted: bool,
     /// We cannot retrieve this client's socket credentials.
     pub credentials_unknown: bool,
+    /// Monotonic time when a minimize request from this client last spawned the minimize helper.
+    pub last_minimize_spawn: Mutex<Option<Duration>>,
 }
 
 impl ClientData for ClientState {

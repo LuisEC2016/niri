@@ -14,6 +14,20 @@ STACK="${XDG_RUNTIME_DIR:-/tmp}/niri-minimized"
 
 touch "$STACK"
 
+# Las ordenes llegan a la vez: el boton de minimizar (via niri), el vigilante
+# del event-stream y los atajos. Sin cerrojo, dos minimize-id de la misma
+# ventana pasaban los dos el "ya esta minimizada" y el segundo guardaba el
+# almacen como origen; y restore_window, al enfocar la ventana, dispara un
+# restore-id del vigilante mientras ella misma sigue a medias. El cerrojo cubre
+# solo lo que lee y escribe la pila, nunca el menu de pick, que espera al usuario.
+lock() {
+    exec 9>"$STACK.lock"
+    flock -w 10 9 || { echo "niri-minimize: pila ocupada" >&2; exit 1; }
+}
+unlock() {
+    flock -u 9
+}
+
 # Elimina de la pila los ids de ventanas que ya no existen (cerradas mientras
 # estaban minimizadas) y los que ya no estan en el workspace almacen.
 prune() {
@@ -158,10 +172,14 @@ pick() {
         [ -n "$label" ] && menu+="$id"$'\t'"$label"$'\n'
     done <"$STACK"
 
+    unlock
     sel=$(printf '%s' "$menu" | fuzzel --dmenu --prompt "Restaurar: " --with-nth 2 --accept-nth 1 2>/dev/null || true)
     [ -n "$sel" ] || exit 0
     id=$(awk '{print $1}' <<<"$sel")
-    ws_id=$(grep -P "^${id}\t" "$STACK" | head -n1 | cut -f2)
+    lock
+    # Mientras el menu estaba abierto otra orden pudo restaurarla ya.
+    ws_id=$(grep -P "^${id}\t" "$STACK" | head -n1 | cut -f2 || true)
+    [ -n "$ws_id" ] || exit 0
     restore_window "$id" "$ws_id"
 }
 
@@ -186,6 +204,10 @@ forget() {
     mv "$STACK.tmp" "$STACK"
     release_stash_if_empty
 }
+
+case "${1:-}" in
+    minimize|minimize-id|restore|restore-id|forget|pick|list) lock ;;
+esac
 
 case "${1:-}" in
     minimize)    minimize ;;
