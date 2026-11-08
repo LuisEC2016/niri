@@ -137,11 +137,14 @@ impl Data {
     fn recompute_logical_pos(&mut self) {
         let mut logical_pos = Self::scale_by_working_area(self.working_area, self.pos);
 
-        // Make sure the window doesn't go too much off-screen. Numbers taken from Mutter.
-        let min_on_screen_hor = f64::clamp(self.size.w / 4., 10., 75.);
-        let min_on_screen_ver = f64::clamp(self.size.h / 4., 10., 75.);
-        let max_off_screen_hor = f64::max(0., self.size.w - min_on_screen_hor);
-        let max_off_screen_ver = f64::max(0., self.size.h - min_on_screen_ver);
+        // Make sure the window doesn't go fully off-screen. Upstream keeps Mutter's numbers here
+        // (a quarter of the size, up to 75 px), which stops floating windows well short of the
+        // screen edge. Keep only a thin strip, and keep it inside the working area rather than
+        // the whole output: the bar is a top layer drawn above windows, so a strip under it
+        // would leave the window with nothing to grab.
+        const MIN_ON_SCREEN: f64 = 10.;
+        let max_off_screen_hor = f64::max(0., self.size.w - MIN_ON_SCREEN);
+        let max_off_screen_ver = f64::max(0., self.size.h - MIN_ON_SCREEN);
 
         logical_pos -= self.working_area.loc;
         logical_pos.x = f64::max(logical_pos.x, -max_off_screen_hor);
