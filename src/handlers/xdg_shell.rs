@@ -41,6 +41,7 @@ use crate::input::resize_grab::ResizeGrab;
 use crate::input::{AnyStartData, DOUBLE_CLICK_TIME};
 use crate::layout::ActivateWindow;
 use crate::niri::{CastTarget, PopupGrabState, State};
+use crate::utils::spawning::spawn_sh;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
     get_monotonic_time, output_matches_name, send_scale_transform, update_tiled_state, ResizeEdge,
@@ -461,6 +462,26 @@ impl XdgShellHandler for State {
             grab,
             has_keyboard_grab: can_receive_keyboard_focus,
         });
+    }
+
+    // niri upstream leaves minimize_request unimplemented, so the minimize button that
+    // client-side decorations draw does nothing. Hand the request off to the user's
+    // minimize helper, which parks the window on the "min" workspace and remembers where
+    // it came from, so the button behaves like minimize does everywhere else.
+    fn minimize_request(&mut self, toplevel: ToplevelSurface) {
+        let Some((mapped, _)) = self
+            .niri
+            .layout
+            .find_window_and_output(toplevel.wl_surface())
+        else {
+            return;
+        };
+
+        let id = mapped.id().get();
+        spawn_sh(
+            format!("exec \"$HOME\"/.config/niri/scripts/niri-minimize.sh minimize-id {id}"),
+            None,
+        );
     }
 
     fn maximize_request(&mut self, toplevel: ToplevelSurface) {
